@@ -78,12 +78,12 @@ echo -e "${GREEN}✔ Ruang penyimpanan mencukupi.${NC}"
 # 3. PEMBARUAN PAKET & INSTALASI DEPENDENSI NATIVE (TAHAN INSTALASI BERULANG)
 echo -e "\n${YELLOW}[3/8] Memeriksa & Memasang Toolchain Resmi Termux...${NC}"
 # Cek apakah paket dasar sudah ada untuk mempercepat re-instalasi
-if ! command -v node >/dev/null 2>&1 || ! command -v clang >/dev/null 2>&1 || ! command -v git >/dev/null 2>&1; then
-    echo "Memperbarui repositori dan memasang dependensi (Node.js LTS, Clang, Make, Python, SQLite)..."
+if ! command -v node >/dev/null 2>&1 || ! command -v clang >/dev/null 2>&1 || ! command -v git >/dev/null 2>&1 || ! command -v unzip >/dev/null 2>&1; then
+    echo "Memperbarui repositori dan memasang dependensi (Node.js LTS, Clang, Make, Python, SQLite, Unzip)..."
     pkg update -y < /dev/null
-    pkg install -y nodejs-lts git clang make python build-essential sqlite libsqlite curl tar openssl termux-api termux-exec < /dev/null
+    pkg install -y nodejs-lts git clang make python build-essential sqlite libsqlite curl tar unzip openssl termux-api termux-exec < /dev/null
 else
-    echo -e "${GREEN}✔ Toolchain dasar (Node.js, Clang, Make, Git) sudah terpasang.${NC}"
+    echo -e "${GREEN}✔ Toolchain dasar (Node.js, Clang, Make, Git, Unzip) sudah terpasang.${NC}"
 fi
 
 # 4. PERSIAPAN FOLDER KERJA MANDIRI (IDEMPOTENT)
@@ -107,25 +107,69 @@ echo -e "${GREEN}✔ Folder kerja dan izin akses persisten siap [chmod 700].${NC
 echo -e "\n${YELLOW}[5/8] Mengunduh Kode Sumber SI BONTOT...${NC}"
 cd "$PROJECT_DIR"
 
+SOURCE_READY=0
+
+# Fungsi helper ekstraksi aman: Info-ZIP return code 0 = ok, 1 = warning (timestamp dll), >=2 = fatal
+extract_archive() {
+    local target_zip="$1"
+    local exit_status=0
+    echo "Mengekstrak berkas: $(basename "$target_zip")..."
+    unzip -o -q "$target_zip" -d "$PROJECT_DIR" < /dev/null 2>/dev/null || exit_status=$?
+    
+    # Validasi bukti fisik berkas hasil ekstraksi (ground truth)
+    if [ -f "$PROJECT_DIR/server/index.js" ] && [ -f "$PROJECT_DIR/package.json" ]; then
+        echo -e "${GREEN}✔ Ekstraksi berkas berhasil dan tervalidasi.${NC}"
+        return 0
+    else
+        echo -e "${YELLOW}[PERINGATAN] Ekstraksi $target_zip tidak menghasilkan berkas lengkap [exit code: $exit_status].${NC}"
+        return 1
+    fi
+}
+
+# 5A. Coba paket lokal di Download jika ada
 if [ -f "/sdcard/Download/si-bontot-android-bundle.zip" ]; then
-    echo "Mengekstrak paket bundle lokal dari /sdcard/Download/..."
-    unzip -o /sdcard/Download/si-bontot-android-bundle.zip -d "$PROJECT_DIR" < /dev/null >/dev/null
-    echo -e "${GREEN}✔ Paket bundle lokal berhasil diekstrak.${NC}"
-elif curl -sL --fail https://raw.githubusercontent.com/thebontotradio-on/bontot_bot/main/si-bontot-android-bundle.zip -o "$PROJECT_DIR/bundle.zip" 2>/dev/null && [ -s "$PROJECT_DIR/bundle.zip" ]; then
-    echo "Mengunduh dan mengekstrak bundle rilis mandiri dari GitHub..."
-    unzip -o "$PROJECT_DIR/bundle.zip" -d "$PROJECT_DIR" < /dev/null >/dev/null
-    rm -f "$PROJECT_DIR/bundle.zip"
-    echo -e "${GREEN}✔ Bundle mandiri berhasil diekstrak.${NC}"
-elif [ ! -f "$PROJECT_DIR/server/index.js" ]; then
-    echo "Mengkloning repositori resmi dari GitHub..."
-    rm -rf "$PROJECT_DIR/temp_clone"
-    git clone https://github.com/thebontotradio-on/bontot_bot.git "$PROJECT_DIR/temp_clone" < /dev/null
-    cp -r "$PROJECT_DIR/temp_clone/"* "$PROJECT_DIR/"
-    rm -rf "$PROJECT_DIR/temp_clone"
-    echo -e "${GREEN}✔ Kode sumber resmi berhasil diunduh dari GitHub.${NC}"
-else
-    echo -e "${GREEN}✔ Kode sumber SI BONTOT sudah tersedia di $PROJECT_DIR.${NC}"
+    echo "Ditemukan bundle lokal di /sdcard/Download/..."
+    if extract_archive "/sdcard/Download/si-bontot-android-bundle.zip"; then
+        SOURCE_READY=1
+    fi
 fi
+
+# 5B. Jika belum siap, unduh bundle rilis mandiri dari GitHub
+if [ "$SOURCE_READY" -eq 0 ]; then
+    echo "Mengunduh bundle rilis mandiri dari GitHub..."
+    BUNDLE_URL="https://raw.githubusercontent.com/thebontotradio-on/bontot_bot/main/si-bontot-android-bundle.zip"
+    if curl -sL --fail "$BUNDLE_URL" -o "$PROJECT_DIR/bundle.zip" < /dev/null 2>/dev/null && [ -s "$PROJECT_DIR/bundle.zip" ]; then
+        if extract_archive "$PROJECT_DIR/bundle.zip"; then
+            SOURCE_READY=1
+        fi
+        rm -f "$PROJECT_DIR/bundle.zip"
+    else
+        echo -e "${YELLOW}[INFO] Bundle rilis GitHub tidak tersedia via direct download, beralih ke Git Clone...${NC}"
+    fi
+fi
+
+# 5C. Fallback Git Clone resmi jika bundle belum menghasilkan berkas
+if [ "$SOURCE_READY" -eq 0 ] && [ ! -f "$PROJECT_DIR/server/index.js" ]; then
+    echo "Mengunduh kode sumber resmi via Git clone..."
+    rm -rf "$PROJECT_DIR/temp_clone"
+    if git clone https://github.com/thebontotradio-on/bontot_bot.git "$PROJECT_DIR/temp_clone" < /dev/null; then
+        cp -r "$PROJECT_DIR/temp_clone/"* "$PROJECT_DIR/"
+        rm -rf "$PROJECT_DIR/temp_clone"
+        if [ -f "$PROJECT_DIR/server/index.js" ]; then
+            echo -e "${GREEN}✔ Kode sumber resmi berhasil disinkronkan via Git.${NC}"
+            SOURCE_READY=1
+        fi
+    fi
+fi
+
+# 5D. Verifikasi Akhir Tahap 5: Jangan pernah berasumsi berhasil jika berkas utama tidak ada
+if [ ! -f "$PROJECT_DIR/server/index.js" ] || [ ! -f "$PROJECT_DIR/package.json" ]; then
+    echo -e "${RED}[GAGAL KRITIS] Berkas server/index.js atau package.json tidak ditemukan di $PROJECT_DIR.${NC}"
+    echo -e "${RED}Tahap 5/8 gagal menyediakan kode sumber SI BONTOT. Instalasi dihentikan.${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✔ Kode sumber SI BONTOT lengkap dan terverifikasi di $PROJECT_DIR.${NC}"
+
 
 # 6. INSTALASI DEPENDENSI NPM & KOMPILASI NATIVE BETTER-SQLITE3
 echo -e "\n${YELLOW}[6/8] Memasang Modul Node.js & Membangun Driver SQLite...${NC}"

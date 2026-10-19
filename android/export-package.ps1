@@ -53,9 +53,21 @@ if ($LeakCount -gt 0) {
     exit 1
 }
 
-# 9. Buat berkas ZIP
-Compress-Archive -Path "$TempDir\wa-bontot\*" -DestinationPath $DistZip -Force
+# 9. Buat berkas ZIP standar PKWARE/POSIX dengan pemisah garis miring (/)
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+$BaseDir = (Get-Item "$TempDir\wa-bontot").FullName
+$ZipArchive = [System.IO.Compression.ZipFile]::Open($DistZip, [System.IO.Compression.ZipArchiveMode]::Create)
+
+Get-ChildItem -Path $BaseDir -Recurse -File | ForEach-Object {
+    $RelPath = $_.FullName.Substring($BaseDir.Length + 1).Replace('\', '/')
+    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($ZipArchive, $_.FullName, $RelPath, [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
+}
+
+$ZipArchive.Dispose()
 Remove-Item $TempDir -Recurse -Force
+
 
 $ZipSize = [math]::Round(((Get-Item $DistZip).Length / 1MB), 2)
 Write-Host "[OK] Bundle mandiri bersih berhasil dibuat: $DistZip ($ZipSize MB)" -ForegroundColor Green
