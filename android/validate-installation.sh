@@ -88,8 +88,12 @@ check_result "7. Watchdog PID Lock" $? "Mekanisme penguncian PID berfungsi norma
 # 8. Validasi Port Jaringan Bebas Konflik
 PORT_3001_FREE=0
 PORT_11434_FREE=0
-(node -e "const s = require('net').createServer().listen(3001, () => s.close());" >/dev/null 2>&1) && PORT_3001_FREE=1
-(node -e "const s = require('net').createServer().listen(11434, () => s.close());" >/dev/null 2>&1) && PORT_11434_FREE=1
+if node -e "const s = require('net').createServer().listen(3001, () => s.close());" >/dev/null 2>&1; then
+    PORT_3001_FREE=1
+fi
+if node -e "const s = require('net').createServer().listen(11434, () => s.close());" >/dev/null 2>&1; then
+    PORT_11434_FREE=1
+fi
 
 if [ "$PORT_3001_FREE" -eq 1 ] && [ "$PORT_11434_FREE" -eq 1 ]; then
     check_result "8. Port Availability" 0 "Port 3001 & 11434 siap digunakan"

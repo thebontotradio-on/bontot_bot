@@ -26,8 +26,7 @@ New-Item -ItemType Directory -Path "$TempDir\wa-bontot" | Out-Null
 
 # 4. Salin HANYA berkas JavaScript server (JAMINAN 100% BEBAS DARI auth_session DAN wabontot.db)
 New-Item -ItemType Directory -Path "$TempDir\wa-bontot\server" -Force | Out-Null
-New-Item -ItemType Directory -Path "$TempDir\wa-bontot\server\auth_session" -Force | Out-Null
-New-Item -ItemType Directory -Path "$TempDir\wa-bontot\server\data" -Force | Out-Null
+
 
 $ServerFiles = @("index.js", "whatsapp.js", "ai.js", "db.js", "utils.js")
 foreach ($sf in $ServerFiles) {
@@ -48,9 +47,9 @@ Copy-Item "$RootPath\package.json" "$TempDir\wa-bontot\package.json" -Force
 Copy-Item "$RootPath\package-lock.json" "$TempDir\wa-bontot\package-lock.json" -Force
 
 # 8. Verifikasi Keamanan Sebelum Kompresi: Pastikan TIDAK ADA file kredensial atau database di staging
-$LeakCount = (Get-ChildItem -Path "$TempDir\wa-bontot\server\auth_session", "$TempDir\wa-bontot\server\data" -Recurse -File).Count
+$LeakCount = (Get-ChildItem -Path "$TempDir" -Recurse -File | Where-Object { $_.FullName -match 'auth_session|wabontot\.db|\.env' }).Count
 if ($LeakCount -gt 0) {
-    Write-Error "[FATAL] Ditemukan berkas di auth_session atau data! Pengemasan dibatalkan demi keamanan."
+    Write-Error "[FATAL] Ditemukan berkas sensitif di staging! Pengemasan dibatalkan demi keamanan."
     exit 1
 }
 
