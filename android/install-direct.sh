@@ -109,22 +109,44 @@ cd "$PROJECT_DIR"
 
 SOURCE_READY=0
 
-# Fungsi helper ekstraksi aman: Info-ZIP return code 0 = ok, 1 = warning (timestamp dll), >=2 = fatal
+# Fungsi helper ekstraksi aman dengan audit status spesifik & verifikasi berkas lengkap
 extract_archive() {
     local target_zip="$1"
     local exit_status=0
+    local unzip_output=""
     echo "Mengekstrak berkas: $(basename "$target_zip")..."
-    unzip -o -q "$target_zip" -d "$PROJECT_DIR" < /dev/null 2>/dev/null || exit_status=$?
     
-    # Validasi bukti fisik berkas hasil ekstraksi (ground truth)
-    if [ -f "$PROJECT_DIR/server/index.js" ] && [ -f "$PROJECT_DIR/package.json" ]; then
-        echo -e "${GREEN}✔ Ekstraksi berkas berhasil dan tervalidasi.${NC}"
+    # Tangkap output dan exit status secara terisolasi tanpa memutus set -e
+    unzip_output=$(unzip -o -q "$target_zip" -d "$PROJECT_DIR" < /dev/null 2>&1) || exit_status=$?
+
+    if [ "$exit_status" -ge 2 ]; then
+        echo -e "${RED}[GAGAL] Arsip $(basename "$target_zip") rusak atau tidak valid [exit code: $exit_status].${NC}"
+        if [ -n "$unzip_output" ]; then
+            echo -e "${YELLOW}Detail unzip: $unzip_output${NC}"
+        fi
+        return 1
+    elif [ "$exit_status" -eq 1 ]; then
+        echo -e "${YELLOW}[PERINGATAN] Info-ZIP melaporkan peringatan non-fatal saat mengekstrak $(basename "$target_zip") [exit code: 1].${NC}"
+    fi
+
+    # Verifikasi ketat kelengkapan seluruh berkas kritis ground truth
+    local missing_count=0
+    for f in "server/index.js" "server/db.js" "server/whatsapp.js" "server/ai.js" "package.json" "client/dist/index.html"; do
+        if [ ! -f "$PROJECT_DIR/$f" ]; then
+            echo -e "${RED}[GAGAL] Berkas penting tidak ditemukan setelah ekstraksi: $f${NC}"
+            missing_count=$((missing_count + 1))
+        fi
+    done
+
+    if [ "$missing_count" -eq 0 ]; then
+        echo -e "${GREEN}✔ Seluruh berkas inti berhasil diekstrak dan diverifikasi lengkap.${NC}"
         return 0
     else
-        echo -e "${YELLOW}[PERINGATAN] Ekstraksi $target_zip tidak menghasilkan berkas lengkap [exit code: $exit_status].${NC}"
+        echo -e "${RED}[GAGAL] Ekstraksi $(basename "$target_zip") tidak lengkap ($missing_count berkas penting hilang).${NC}"
         return 1
     fi
 }
+
 
 # 5A. Coba paket lokal di Download jika ada
 if [ -f "/sdcard/Download/si-bontot-android-bundle.zip" ]; then
