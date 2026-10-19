@@ -237,13 +237,14 @@ test('Test 14: Mengosongkan allowlist mengembalikan daftar kosong dengan aman', 
 });
 
 // 15. Sanitasi output AI (cleanAiReplyText)
-test('Test 15: cleanAiReplyText membersihkan tag berpikir, awalan label AI, tanda kutip, dan menormalisasi frasa formal', () => {
+test('Test 15: cleanAiReplyText membersihkan tag berpikir, awalan label AI, tanda kutip, dan frasa kaku CS', () => {
   const { cleanAiReplyText } = require('../server/ai');
   assert.equal(cleanAiReplyText('<think>internal thinking</think>Halo Bro!'), 'Halo Bro!');
   assert.equal(cleanAiReplyText('SI BONTOT: Bang Adhy lagi kerja nih'), 'Bang Adhy lagi kerja nih');
   assert.equal(cleanAiReplyText('Bang Adhy sedang sibuk bekerja'), 'Bang Adhy lagi kerja');
-  assert.equal(cleanAiReplyText('Mau titip pesan untuk beliau?'), 'Mau titip pesan buat Bang Adhy?');
-  assert.equal(cleanAiReplyText('Bagaimana kabar Anda?'), 'lu gimana kabar?');
+  assert.equal(cleanAiReplyText('Halo Bro! saya masih online untuk membantu menjawab pertanyaanmu.'), 'Halo Bro!');
+  assert.equal(cleanAiReplyText('Bagaimana saya bisa membantu Anda?'), '');
+  assert.equal(cleanAiReplyText('Sama-sama Bro! Apa adakah pertanyaan lainnya yang ingin kamu ajukan hari ini?'), 'Sama-sama Bro!');
   assert.equal(cleanAiReplyText('"Siap bantu lu, Bro!"'), 'Siap bantu lu, Bro!');
   assert.equal(cleanAiReplyText(''), '');
 });
@@ -316,3 +317,68 @@ test('Test 19: Respons AI menolak bahasa kaku/formal dan mengutamakan kata lagi'
   assert.equal(lower.includes('sedang sibuk bekerja'), false, 'Harus pakai lagi kerja');
   assert.equal(lower.includes('kepada beliau'), false, 'Tidak boleh memakai kata formal beliau');
 });
+
+// 20. Pengujian regresi percakapan berurutan multi-turn (Sehat bro? -> Bro -> Ngapain Bang Adhy? -> Makasih ya)
+test('Test 20: Rangkaian percakapan multi-turn berurutan merespons secara kontekstual, singkat, dan tidak robotik', async () => {
+  const { generateContextualReply } = require('../server/ai');
+  const seqChatId = `multi-turn-test-${Date.now()}@s.whatsapp.net`;
+  db.ensureChatExists(seqChatId, 'Budi');
+
+  const turns = [
+    { input: 'Sehat bro?', expectedNotIn: ['online untuk membantu', 'bagaimana saya bisa membantu'] },
+    { input: 'Bro', expectedNotIn: ['lagi kerja'] },
+    { input: 'Ngapain Bang Adhy?', expectedIn: ['kerja'] },
+    { input: 'Makasih ya', expectedNotIn: ['pertanyaan lainnya', 'lagi kerja'] }
+  ];
+
+  let turnIndex = 0;
+  for (const turn of turns) {
+    turnIndex++;
+    const userMsgId = `seq-user-msg-${turnIndex}-${Date.now()}`;
+    db.saveMessage({
+      id: userMsgId,
+      chatId: seqChatId,
+      senderJid: seqChatId,
+      text: turn.input,
+      isFromMe: false,
+      timestamp: Math.floor(Date.now() / 1000)
+    });
+
+    const aiRes = await generateContextualReply({
+      chatId: seqChatId,
+      currentMessageId: userMsgId,
+      currentMessage: turn.input,
+      senderName: 'Budi'
+    });
+
+    assert.ok(aiRes.reply && aiRes.reply.length > 0, `Turn ${turnIndex} harus menghasilkan balasan`);
+    assert.ok(aiRes.reply.length < 160, `Balasan turn ${turnIndex} harus ringkas (< 160 karakter): ${aiRes.reply}`);
+
+    const lower = aiRes.reply.toLowerCase();
+    assert.equal(lower.includes('saya masih online'), false, `Turn ${turnIndex} tidak boleh mengandung saya masih online`);
+    assert.equal(lower.includes('pertanyaan lainnya'), false, `Turn ${turnIndex} tidak boleh mengandung pertanyaan lainnya`);
+
+    if (turn.expectedIn) {
+      for (const word of turn.expectedIn) {
+        assert.ok(lower.includes(word), `Turn ${turnIndex} diharapkan mengandung "${word}": ${aiRes.reply}`);
+      }
+    }
+
+    if (turn.expectedNotIn) {
+      for (const word of turn.expectedNotIn) {
+        assert.equal(lower.includes(word), false, `Turn ${turnIndex} dilarang mengandung "${word}": ${aiRes.reply}`);
+      }
+    }
+
+    const botMsgId = `seq-bot-reply-${turnIndex}-${Date.now()}`;
+    db.saveMessage({
+      id: botMsgId,
+      chatId: seqChatId,
+      senderJid: '6281990918273@s.whatsapp.net',
+      text: aiRes.reply,
+      isFromMe: true,
+      timestamp: Math.floor(Date.now() / 1000) + 1
+    });
+  }
+});
+

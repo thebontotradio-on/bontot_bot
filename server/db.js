@@ -152,9 +152,9 @@ const stmts = {
     SELECT * FROM (
       SELECT * FROM messages 
       WHERE chat_id = ? 
-      ORDER BY timestamp DESC 
+      ORDER BY timestamp DESC, id DESC 
       LIMIT ?
-    ) ORDER BY timestamp ASC
+    ) ORDER BY timestamp ASC, id ASC
   `),
 
   getContact: db.prepare('SELECT * FROM contacts WHERE id = ?'),

@@ -459,10 +459,14 @@ class WhatsAppManager {
 
     try {
       // 10. Generate contextual reply with SI BONTOT character
+      const contact = db.getContact(rawJid) || db.getChatById(rawJid);
+      const senderName = contact?.name && !contact.name.includes('@') ? contact.name : null;
+
       const aiResult = await generateContextualReply({
         chatId: rawJid,
         currentMessageId: messageId,
-        currentMessage: text
+        currentMessage: text,
+        senderName
       });
 
       const replyText = aiResult.reply;
