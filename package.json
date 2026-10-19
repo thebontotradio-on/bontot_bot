@@ -1,0 +1,36 @@
+{
+  "name": "wa-bontot",
+  "version": "1.0.0",
+  "description": "WA BONTOT - Dashboard WhatsApp Pribadi dengan Asisten Draf AI Lokal",
+  "main": "server/index.js",
+  "scripts": {
+    "server": "node server/index.js",
+    "client": "npm --prefix client run dev",
+    "dev": "concurrently -n \"SERVER,CLIENT\" -c \"cyan,magenta\" \"npm run server\" \"npm run client\"",
+    "start": "node server/index.js",
+    "build": "npm --prefix client run build",
+    "test": "node --test test/*.test.js"
+  },
+  "keywords": [
+    "whatsapp",
+    "baileys",
+    "dashboard",
+    "ollama",
+    "ai",
+    "sqlite"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc14",
+    "axios": "^1.13.2",
+    "better-sqlite3": "^12.6.2",
+    "concurrently": "^9.2.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "pino": "^10.3.1",
+    "qrcode": "^1.5.4",
+    "socket.io": "^4.8.3"
+  }
+}

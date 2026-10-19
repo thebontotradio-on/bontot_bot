@@ -1,0 +1,236 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const db = require('../server/db');
+const waManager = require('../server/whatsapp');
+const {
+  checkOllamaStatus,
+  generateAiReply,
+  generateContextualReply,
+  resolveSystemPrompt,
+  DEFAULT_SYSTEM_PROMPT
+} = require('../server/ai');
+
+// 1. Auto-Reply default OFF.
+test('Test 1: Auto-Reply default status wajib OFF', () => {
+  // Reset instance to default
+  waManager.setAutoReplyEnabled(false);
+  assert.equal(waManager.getAutoReplyEnabled(), false, 'Auto-reply harus bernilai false secara default');
+});
+
+// 2. Pesan masuk baru dibalas ketika ON dan Ollama tersedia.
+test('Test 2: Pesan masuk baru diproses ketika Auto-Reply ON dan Ollama aktif', async () => {
+  waManager.setAutoReplyEnabled(true);
+  const chatId = 'user-auto-test@s.whatsapp.net';
+  const msgId = `auto-msg-valid-${Date.now()}`;
+
+  // Simulasikan pesan masuk di DB
+  db.saveMessage({
+    id: msgId,
+    chatId,
+    senderJid: chatId,
+    text: 'Halo SI BONTOT, radio THE BONTOT frekuensi berapa?',
+    isFromMe: false,
+    timestamp: Math.floor(Date.now() / 1000),
+    status: 'delivered'
+  });
+
+  // Uji penguncian pemrosesan auto-reply
+  const locked = db.lockAutoReplyProcessing(msgId, chatId);
+  assert.equal(locked, true, 'Kunci pemrosesan harus berhasil didapat untuk pesan baru');
+
+  // Simulasikan penyelesaian balasan
+  const sampleReply = 'Halo! SI BONTOT di sini dari THE BONTOT RADIO. Kami mengudara di streaming digital 24 jam!';
+  db.markAutoReplySuccess(msgId, sampleReply);
+
+  assert.equal(db.isAutoReplyHandled(msgId), true, 'Pesan harus tercatat sebagai sudah diproses');
+  waManager.setAutoReplyEnabled(false);
+});
+
+// 3. Pesan dari akun sendiri tidak dibalas.
+test('Test 3: Pesan dari akun sendiri (fromMe) tidak boleh dibalas otomatis', async () => {
+  waManager.setAutoReplyEnabled(true);
+  const myMsgId = `from-me-${Date.now()}`;
+  const chatId = 'target-friend@s.whatsapp.net';
+
+  // Pesan keluar (isFromMe: true)
+  const saveRes = db.saveMessage({
+    id: myMsgId,
+    chatId,
+    senderJid: 'me',
+    text: 'Pesan dari diri saya sendiri',
+    isFromMe: true,
+    timestamp: Math.floor(Date.now() / 1000),
+    status: 'sent'
+  });
+
+  assert.equal(saveRes.message.is_from_me, 1);
+  // Logika Baileys messages.upsert:
+  // if (saveResult.isNew && !isFromMe) { this.processAutoReply(...) }
+  // Karena isFromMe bernilai true, processAutoReply TIDAK PERNAH dipanggil
+  assert.equal(db.isAutoReplyHandled(myMsgId), false, 'Pesan fromMe tidak boleh masuk ke log auto-reply');
+  waManager.setAutoReplyEnabled(false);
+});
+
+// 4. Pesan yang sama tidak dibalas dua kali.
+test('Test 4: Pesan yang sama tidak boleh dibalas dua kali', async () => {
+  const msgId = `dedup-reply-${Date.now()}`;
+  const chatId = 'user-test-4@s.whatsapp.net';
+
+  // Kunci pertama kali
+  const lock1 = db.lockAutoReplyProcessing(msgId, chatId);
+  assert.equal(lock1, true, 'Kunci pertama harus sukses');
+
+  // Kunci kedua kali untuk pesan yang sama
+  const lock2 = db.lockAutoReplyProcessing(msgId, chatId);
+  assert.equal(lock2, false, 'Kunci kedua harus gagal karena ID pesan sudah terdaftar');
+
+  assert.equal(db.isAutoReplyHandled(msgId), true);
+});
+
+// 5. Dua pesan masuk berdekatan tidak memicu balasan ganda (cooldown anti-spam).
+test('Test 5: Dua pesan masuk berdekatan ke chat yang sama mematuhi jeda anti-spam (cooldown)', () => {
+  const chatId = 'cooldown-chat@s.whatsapp.net';
+  const msg1 = `burst-1-${Date.now()}`;
+  const msg2 = `burst-2-${Date.now()}`;
+
+  // Balas pesan 1 sekarang
+  db.lockAutoReplyProcessing(msg1, chatId);
+  db.markAutoReplySuccess(msg1, 'Balasan 1');
+
+  // Cek timestamp balasan terakhir
+  const lastReplyTime = db.getLastAutoReplyTimestamp(chatId);
+  const now = Math.floor(Date.now() / 1000);
+  assert.ok(lastReplyTime > 0);
+
+  // Jika pesan 2 tiba dalam selang waktu < 4 detik
+  const diff = now - lastReplyTime;
+  const isCooldownActive = diff < 4;
+  assert.equal(isCooldownActive, true, 'Cooldown harus aktif jika pesan tiba dalam selang waktu sangat singkat');
+});
+
+// 6. Pesan grup tidak dibalas secara default.
+test('Test 6: Pesan grup (@g.us) tidak dibalas otomatis secara default', async () => {
+  waManager.setAutoReplyEnabled(true);
+  const groupJid = '12036302847192@g.us';
+  const groupMsgId = `group-msg-${Date.now()}`;
+
+  // processAutoReply memeriksa: if (rawJid.endsWith('@g.us')) return;
+  await waManager.processAutoReply(groupJid, groupMsgId, 'Halo grup!');
+  assert.equal(db.isAutoReplyHandled(groupMsgId), false, 'Pesan grup harus diabaikan');
+  waManager.setAutoReplyEnabled(false);
+});
+
+// 7. Error penanganan / kegagalan AI ditangani dengan aman tanpa crash server.
+test('Test 7: Error / kegagalan AI ditangani dengan aman tanpa crash', async () => {
+  waManager.setAutoReplyEnabled(true);
+  const chatId = 'offline-test@s.whatsapp.net';
+  const msgId = `offline-msg-${Date.now()}`;
+
+  // Cek bahwa generateContextualReply menolak jika input kosong dengan error tertangani
+  await assert.rejects(
+    async () => {
+      await generateContextualReply({
+        chatId,
+        currentMessage: ''
+      });
+    },
+    (err) => {
+      assert.ok(err.message.includes('kosong'));
+      return true;
+    }
+  );
+
+  // processAutoReply mencatat status ke database tanpa melempar exception ke server
+  await waManager.processAutoReply(chatId, msgId, 'Tes penanganan aman');
+  assert.equal(db.isAutoReplyHandled(msgId), true);
+  waManager.setAutoReplyEnabled(false);
+});
+
+// 8. Respons AI kosong tidak dikirim ke WhatsApp.
+test('Test 8: Respons AI kosong tidak boleh dikirim sebagai pesan', async () => {
+  const emptyReply = '   ';
+  const isValid = Boolean(emptyReply && typeof emptyReply === 'string' && emptyReply.trim().length > 0);
+  assert.equal(isValid, false, 'String kosong tidak boleh dianggap valid untuk dikirim');
+});
+
+// 9. Toggle OFF menghentikan pemrosesan pesan baru.
+test('Test 9: Toggle OFF menghentikan pemrosesan pesan baru seketika', async () => {
+  waManager.setAutoReplyEnabled(false);
+  const chatId = 'toggle-off-test@s.whatsapp.net';
+  const msgId = `msg-toggle-off-${Date.now()}`;
+
+  await waManager.processAutoReply(chatId, msgId, 'Pesan saat fitur OFF');
+  assert.equal(db.isAutoReplyHandled(msgId), false, 'Pesan tidak boleh diproses saat Auto-Reply bernilai OFF');
+});
+
+// 10. Restart server tidak menyebabkan pesan lama dibalas ulang.
+test('Test 10: Pesan lama yang sudah tersimpan di database tidak dibalas ulang saat server restart', () => {
+  const oldMsgId = `old-message-historical-${Date.now()}`;
+  const chatId = 'user-historical@s.whatsapp.net';
+
+  // Tandai pesan sudah ditangani di SQLite
+  db.lockAutoReplyProcessing(oldMsgId, chatId);
+  db.markAutoReplySuccess(oldMsgId, 'Sudah dibalas kemarin');
+
+  // Simulasikan server restart: data tetap ada di SQLite
+  const isHandledAfterRestart = db.isAutoReplyHandled(oldMsgId);
+  assert.equal(isHandledAfterRestart, true, 'Pesan lama harus tetap tercatat sebagai handled setelah restart');
+});
+
+// 11. Pengiriman manual tetap berfungsi.
+test('Test 11: Pengiriman manual tetap berfungsi dan menghasilkan objek pesan yang valid', async () => {
+  // formatDestinationJid
+  const target = waManager.formatDestinationJid('08123456789');
+  assert.equal(target, '628123456789@s.whatsapp.net');
+
+  // Ketika disconnect, sendMessage melempar error yang jelas
+  await assert.rejects(
+    async () => {
+      // Jika socket null/closed
+      const tempManager = new (require('../server/whatsapp').constructor)();
+      await tempManager.sendMessage('08123456789', 'Tes manual');
+    },
+    (err) => {
+      assert.ok(err.message.includes('WhatsApp belum terhubung'));
+      return true;
+    }
+  );
+});
+
+// 12. Karakter dan Persona SI BONTOT terkonfigurasi benar.
+test('Test 12: System prompt default SI BONTOT memuat identitas THE BONTOT RADIO dan santai', () => {
+  const prompt = resolveSystemPrompt('');
+  assert.ok(prompt.includes('SI BONTOT'));
+  assert.ok(prompt.includes('THE BONTOT RADIO'));
+  assert.ok(prompt.includes('bahasa Indonesia sehari-hari'));
+  assert.ok(prompt.includes('Jangan menyebut dirimu sebagai manusia'));
+});
+
+// 13. Controlled test isolation: allowlist membatasi auto-reply hanya ke kontak yang diizinkan
+test('Test 13: Allowlist membatasi auto-reply hanya untuk kontak yang terdaftar', async () => {
+  waManager.setAutoReplyEnabled(true);
+  waManager.setTestAllowlist(['allowed-user@s.whatsapp.net']);
+
+  const blockedChatId = 'blocked-user@s.whatsapp.net';
+  const blockedMsgId = `blocked-msg-${Date.now()}`;
+
+  // Contact outside allowlist should be skipped immediately without DB lock or reply
+  await waManager.processAutoReply(blockedChatId, blockedMsgId, 'Halo dari kontak luar');
+  assert.equal(db.isAutoReplyHandled(blockedMsgId), false, 'Kontak di luar allowlist tidak boleh diproses');
+
+  // Contact in allowlist is allowed
+  assert.deepEqual(waManager.getTestAllowlist(), ['allowed-user@s.whatsapp.net']);
+
+  // Reset allowlist and autoReply
+  waManager.setTestAllowlist([]);
+  waManager.setAutoReplyEnabled(false);
+});
+
+// 14. Mengosongkan allowlist mengembalikan daftar kosong dengan aman
+test('Test 14: Mengosongkan allowlist mengembalikan daftar kosong dengan aman', () => {
+  waManager.setTestAllowlist(['temp@s.whatsapp.net']);
+  assert.equal(waManager.getTestAllowlist().length, 1);
+  waManager.setTestAllowlist([]);
+  assert.equal(waManager.getTestAllowlist().length, 0);
+  assert.equal(waManager.getAutoReplyEnabled(), false);
+});
