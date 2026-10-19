@@ -108,6 +108,24 @@ class WhatsAppManager {
     return Array.from(this.testAllowlist);
   }
 
+  matchesAllowlist(rawJid) {
+    if (!this.testAllowlist || this.testAllowlist.size === 0) {
+      return true;
+    }
+    if (this.testAllowlist.has(rawJid)) return true;
+
+    // Normalize comparison: strip @domain and non-digits
+    const rawClean = (rawJid || '').replace(/@.*$/, '').replace(/\D/g, '');
+    for (const item of this.testAllowlist) {
+      if (item === rawJid) return true;
+      const itemClean = item.replace(/@.*$/, '').replace(/\D/g, '');
+      if (rawClean && itemClean && rawClean === itemClean) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   clearReconnectTimer() {
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
@@ -396,7 +414,7 @@ class WhatsAppManager {
     if (!this.autoReplyEnabled) return;
 
     // 1b. Controlled test isolation: if an allowlist is configured, ignore all unlisted contacts
-    if (this.testAllowlist && this.testAllowlist.size > 0 && !this.testAllowlist.has(rawJid)) {
+    if (this.testAllowlist && this.testAllowlist.size > 0 && !this.matchesAllowlist(rawJid)) {
       return;
     }
 
