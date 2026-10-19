@@ -203,7 +203,8 @@ test('Test 12: System prompt default SI BONTOT memuat identitas Bang Adhy, THE B
   assert.ok(prompt.includes('SI BONTOT'));
   assert.ok(prompt.includes('THE BONTOT RADIO'));
   assert.ok(prompt.includes('Bang Adhy'));
-  assert.ok(prompt.includes('Jangan mengaku sebagai manusia'));
+  assert.ok(prompt.includes('lagi kerja'));
+  assert.ok(prompt.includes('HINDARI KATA FORMAL'));
 });
 
 // 13. Controlled test isolation: allowlist membatasi auto-reply hanya ke kontak yang diizinkan
@@ -236,23 +237,27 @@ test('Test 14: Mengosongkan allowlist mengembalikan daftar kosong dengan aman', 
 });
 
 // 15. Sanitasi output AI (cleanAiReplyText)
-test('Test 15: cleanAiReplyText membersihkan tag berpikir, awalan label AI, dan tanda kutip', () => {
+test('Test 15: cleanAiReplyText membersihkan tag berpikir, awalan label AI, tanda kutip, dan menormalisasi frasa formal', () => {
   const { cleanAiReplyText } = require('../server/ai');
   assert.equal(cleanAiReplyText('<think>internal thinking</think>Halo Bro!'), 'Halo Bro!');
-  assert.equal(cleanAiReplyText('SI BONTOT: Bang Adhy lagi sibuk kerja nih'), 'Bang Adhy lagi sibuk kerja nih');
-  assert.equal(cleanAiReplyText('AI: Ada yang bisa gw bantu?'), 'Ada yang bisa gw bantu?');
+  assert.equal(cleanAiReplyText('SI BONTOT: Bang Adhy lagi kerja nih'), 'Bang Adhy lagi kerja nih');
+  assert.equal(cleanAiReplyText('Bang Adhy sedang sibuk bekerja'), 'Bang Adhy lagi kerja');
+  assert.equal(cleanAiReplyText('Mau titip pesan untuk beliau?'), 'Mau titip pesan buat Bang Adhy?');
+  assert.equal(cleanAiReplyText('Bagaimana kabar Anda?'), 'lu gimana kabar?');
   assert.equal(cleanAiReplyText('"Siap bantu lu, Bro!"'), 'Siap bantu lu, Bro!');
   assert.equal(cleanAiReplyText(''), '');
 });
 
-// 16. Respons AI tentang Bang Adhy mewakili beliau dan tidak mengaku sebagai Adhy
-test('Test 16: Respons AI tentang Bang Adhy memposisikan sebagai asisten', async () => {
+// 16. Respons AI tentang Bang Adhy memposisikan sebagai asisten dan bebas frasa kaku
+test('Test 16: Respons AI tentang Bang Adhy memposisikan sebagai asisten dan bebas frasa kaku', async () => {
   const { generateAiReply } = require('../server/ai');
   const res = await generateAiReply({
     message: 'Bang Adhy mana bro?'
   });
   assert.ok(res.reply && res.reply.length > 0);
-  assert.ok(res.reply.toLowerCase().includes('adhy') || res.reply.toLowerCase().includes('sibuk') || res.reply.toLowerCase().includes('pesan'));
+  assert.ok(res.reply.toLowerCase().includes('adhy'));
+  // Memastikan gaya informal digunakan: tidak mengandung 'sedang sibuk bekerja'
+  assert.equal(res.reply.toLowerCase().includes('sedang sibuk bekerja'), false, 'Tidak boleh memakai frasa kaku sedang sibuk bekerja');
   assert.equal(res.model, 'qwen2.5:1.5b');
 });
 
@@ -297,4 +302,17 @@ test('Test 18: generateContextualReply menyertakan histori obrolan secara terstr
 
   assert.ok(res.reply && res.reply.length > 0);
   assert.ok(res.reply.toLowerCase().includes('tiktok') || res.reply.toLowerCase().includes('malam') || res.reply.toLowerCase().includes('bontot'));
+});
+
+// 19. Uji pencegahan frasa formal dan verifikasi gaya santai WA
+test('Test 19: Respons AI menolak bahasa kaku/formal dan mengutamakan kata lagi', async () => {
+  const { generateAiReply } = require('../server/ai');
+  const res = await generateAiReply({
+    message: 'Bang Adhy bisa dihubungi sekarang?'
+  });
+  assert.ok(res.reply && res.reply.length > 0);
+  const lower = res.reply.toLowerCase();
+  assert.equal(lower.includes('apakah ada yang dapat saya bantu'), false, 'Tidak boleh memakai frasa kaku CS');
+  assert.equal(lower.includes('sedang sibuk bekerja'), false, 'Harus pakai lagi kerja');
+  assert.equal(lower.includes('kepada beliau'), false, 'Tidak boleh memakai kata formal beliau');
 });
