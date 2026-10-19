@@ -1,6 +1,7 @@
 import axios from 'axios';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+const isSameOrigin = typeof window !== 'undefined' && (window.location.port === '3001' || window.location.port === '');
+export const API_BASE_URL = isSameOrigin ? '' : (import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001');
 
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,

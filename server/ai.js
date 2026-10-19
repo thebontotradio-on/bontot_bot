@@ -105,34 +105,40 @@ function cleanAiReplyText(text) {
   return cleaned.trim();
 }
 
+function getOllamaHost() {
+  return process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
+}
+
 /**
  * Check Ollama service availability and installed models
  */
 async function checkOllamaStatus() {
+  const host = getOllamaHost();
   try {
-    const response = await axios.get(`${OLLAMA_HOST}/api/tags`, {
+    const response = await axios.get(`${host}/api/tags`, {
       timeout: 2500
     });
 
     const models = (response.data && response.data.models) || [];
     const modelNames = models.map(m => m.name);
 
+    const hasActiveModel = modelNames.length > 0;
     return {
-      available: true,
-      host: OLLAMA_HOST,
+      available: hasActiveModel,
+      host: host,
       models: modelNames,
-      activeModel: modelNames.length > 0 ? (process.env.OLLAMA_MODEL || modelNames[0]) : null,
-      message: modelNames.length > 0
-        ? `Ollama aktif dengan ${modelNames.length} model terpasang.`
-        : 'Ollama aktif, tetapi belum ada model yang diunduh (jalankan: ollama run qwen2.5:1.5b).'
+      activeModel: hasActiveModel ? (process.env.OLLAMA_MODEL || modelNames[0]) : null,
+      message: hasActiveModel
+        ? `AI aktif dengan ${modelNames.length} model terpasang.`
+        : 'Layanan AI terhubung, tetapi belum ada model yang dimuat.'
     };
   } catch (err) {
     return {
       available: false,
-      host: OLLAMA_HOST,
+      host: host,
       models: [],
       activeModel: null,
-      message: 'Ollama belum aktif di ' + OLLAMA_HOST + '. Pastikan aplikasi Ollama sudah dijalankan.'
+      message: 'Ollama belum aktif di ' + host + '. Pastikan aplikasi Ollama sudah dijalankan.'
     };
   }
 }
@@ -179,7 +185,7 @@ async function generateAiReply({ message, systemPrompt }) {
 
   try {
     const response = await axios.post(
-      `${OLLAMA_HOST}/api/chat`,
+      `${getOllamaHost()}/api/chat`,
       {
         model: status.activeModel,
         messages: [
@@ -269,7 +275,7 @@ async function generateContextualReply({ chatId, currentMessageId, currentMessag
 
   try {
     const response = await axios.post(
-      `${OLLAMA_HOST}/api/chat`,
+      `${getOllamaHost()}/api/chat`,
       {
         model: status.activeModel,
         messages: messagesPayload,

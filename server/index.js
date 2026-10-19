@@ -3,6 +3,9 @@ const express = require('express');
 const cors = require('cors');
 const { Server } = require('socket.io');
 
+const path = require('path');
+const fs = require('fs');
+
 const db = require('./db');
 const waManager = require('./whatsapp');
 const { checkOllamaStatus, generateAiReply, resolveSystemPrompt, DEFAULT_SYSTEM_PROMPT } = require('./ai');
@@ -10,22 +13,52 @@ const { checkOllamaStatus, generateAiReply, resolveSystemPrompt, DEFAULT_SYSTEM_
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Allowed origin validator for Localhost and LAN (Private IP) access
+function isAllowedOrigin(origin) {
+  if (!origin) return true; // Same-origin or server-to-server
+  try {
+    const url = new URL(origin);
+    const host = url.hostname;
+    return (
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host.startsWith('192.168.') ||
+      host.startsWith('10.') ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
+    );
+  } catch (e) {
+    return false;
+  }
+}
+
 // Middlewares
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+  origin: (origin, callback) => {
+    if (isAllowedOrigin(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Origin tidak diizinkan oleh CORS'));
+    }
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true
 }));
 
 app.use(express.json());
 
-// IMPORTANT: Do NOT use express.static to expose root, auth_session, or data directory!
+// Serve static client build if available (e.g. Android portable single-port mode)
+const clientDistPath = path.join(__dirname, '../client/dist');
+if (fs.existsSync(clientDistPath)) {
+  app.use(express.static(clientDistPath));
+}
 
 // HTTP Server & Socket.IO
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+    origin: (origin, callback) => {
+      callback(null, isAllowedOrigin(origin));
+    },
     methods: ['GET', 'POST']
   }
 });
@@ -313,7 +346,15 @@ app.post('/api/auto-reply/allowlist', (req, res) => {
       error: err.message
     });
   }
-});
+// SPA Fallback for client routing (excluding API and Socket.IO routes)
+if (fs.existsSync(clientDistPath)) {
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/socket.io')) {
+      return next();
+    }
+    res.sendFile(path.join(clientDistPath, 'index.html'));
+  });
+}
 
 // Start server with EADDRINUSE handling
 server.listen(PORT, () => {

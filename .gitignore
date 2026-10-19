@@ -2,8 +2,8 @@
 node_modules/
 client/node_modules/
 
-# Production builds
-client/dist/
+# Production builds (client/dist tracked for portable single-port execution)
+!client/dist/
 
 # WhatsApp Auth Session & Database (SENSITIVE)
 server/auth_session/

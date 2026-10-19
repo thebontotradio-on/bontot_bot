@@ -93,7 +93,8 @@ export default function App() {
 
   // Initialize Socket.IO connection
   useEffect(() => {
-    const socket = io(API_BASE_URL, {
+    const socketTarget = API_BASE_URL || undefined;
+    const socket = io(socketTarget, {
       transports: ['websocket', 'polling']
     });
     socketRef.current = socket;
