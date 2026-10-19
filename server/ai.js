@@ -2,8 +2,44 @@ const axios = require('axios');
 const db = require('./db');
 
 const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
-const DEFAULT_SYSTEM_PROMPT =
-  'Kamu adalah SI BONTOT, asisten WhatsApp milik THE BONTOT RADIO. Kamu ramah, santai, cerdas, humoris seperlunya, dan berbicara dalam bahasa Indonesia sehari-hari. Jawab seperti percakapan WhatsApp yang alami, singkat jika pertanyaannya sederhana, dan lebih terperinci jika diperlukan. Pahami konteks percakapan sebelum menjawab. Jangan mengarang informasi yang tidak kamu ketahui. Jangan mengulang salam atau jawaban yang sama secara tidak perlu. Jangan menyebut dirimu sebagai manusia. Jika pertanyaan tidak jelas, tanyakan dengan sopan.';
+const DEFAULT_SYSTEM_PROMPT = `Kamu adalah SI BONTOT, bot AI asisten pribadi Bang Adhy (Adhy Rosadi), host THE BONTOT RADIO.
+INGAT: Kamu BUKAN Bang Adhy. Bang Adhy adalah bosmu. Lawan bicara adalah teman/pendengar WhatsApp.
+
+PANDUAN UTAMA:
+1. Identitas: Kamu adalah bot AI bernama SI BONTOT yang membantu membalas chat saat Bang Adhy sibuk.
+2. Jika ditanya "Bang Adhy mana?": Jawab bahwa Bang Adhy lagi sibuk kerja/aktivitas, lalu tawarkan apakah mau titip pesan untuk beliau. Jangan pernah mengaku bahwa kamu adalah Bang Adhy.
+3. Jika ditanya "Kamu manusia bukan?": Jawab jujur dan santai bahwa kamu adalah AI asistennya Bang Adhy. Jangan mengaku sebagai manusia.
+4. Jadwal siaran: Biasanya Bang Adhy LIVE di TikTok THE BONTOT RADIO jam 8 malam (20.00) sampai tengah malam WIB, kecuali kalau lagi libur/off.
+5. Gaya bahasa: Santai, akrab, hangat, luwes seperti chat WhatsApp (panggil "Bro", "Bang", atau "Kak", gunakan "gw" / "aku").
+6. Jangan mengarang lokasi detail, cuaca, atau janji temu. Jawab singkat dan padat langsung ke intinya.
+
+CONTOH RESPONS:
+- "Bang Adhy mana bro?" -> "Bang Adhy lagi sibuk kerja nih 😄 Mau titip pesan buat beliau?"
+- "Apa kabar?" -> "Baik nih, Bro 😄 Ada yang bisa gw bantu?"
+- "Kamu manusia bukan?" -> "Hehe, gw SI BONTOT, asisten AI-nya Bang Adhy 😄 Siap bantu jawab pertanyaan lu!"
+- "Bang Adhy siaran jam berapa?" -> "Biasanya Bang Adhy LIVE di TikTok jam 8 malam sampai tengah malam WIB, pantengin THE BONTOT RADIO ya!"
+- "Bang Adhy lagi di mana sekarang?" -> "Wah kurang tau Bro, beliau lagi sibuk kerja. Mau titip pesan buat beliau?"`;
+
+/**
+ * Sanitizes and cleans raw AI output so no internal tags or prefixes leak into WhatsApp messages
+ */
+function cleanAiReplyText(text) {
+  if (!text || typeof text !== 'string') return '';
+  let cleaned = text.trim();
+
+  // Strip accidental thinking tags <think>...</think>
+  cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+
+  // Strip accidental prefixes like "AI:", "SI BONTOT:", "Assistant:", "Bot:"
+  cleaned = cleaned.replace(/^(SI\s*BONTOT|AI|Assistant|Bot)\s*:\s*/i, '').trim();
+
+  // Strip surrounding quotes if whole string is wrapped
+  if ((cleaned.startsWith('"') && cleaned.endsWith('"')) || (cleaned.startsWith("'") && cleaned.endsWith("'"))) {
+    cleaned = cleaned.slice(1, -1).trim();
+  }
+
+  return cleaned;
+}
 
 /**
  * Check Ollama service availability and installed models
@@ -86,20 +122,26 @@ async function generateAiReply({ message, systemPrompt }) {
           { role: 'system', content: effectiveSystemPrompt },
           { role: 'user', content: message.trim() }
         ],
+        options: {
+          temperature: 0.6,
+          top_p: 0.9,
+          repeat_penalty: 1.15
+        },
         stream: false
       },
       {
-        timeout: 45000
+        timeout: 90000
       }
     );
 
-    const replyContent = response.data?.message?.content;
-    if (!replyContent || replyContent.trim().length === 0) {
+    const rawReply = response.data?.message?.content;
+    const cleaned = cleanAiReplyText(rawReply);
+    if (!cleaned || cleaned.length === 0) {
       throw new Error('Ollama tidak memberikan balasan teks.');
     }
 
     return {
-      reply: replyContent.trim(),
+      reply: cleaned,
       model: status.activeModel,
       usedSystemPrompt: effectiveSystemPrompt
     };
@@ -118,7 +160,7 @@ async function generateAiReply({ message, systemPrompt }) {
  * Generate contextual auto-reply for SI BONTOT including recent chat thread history.
  * Never sends credentials or auth tokens to Ollama.
  */
-async function generateContextualReply({ chatId, currentMessage, systemPrompt }) {
+async function generateContextualReply({ chatId, currentMessageId, currentMessage, systemPrompt }) {
   if (!currentMessage || typeof currentMessage !== 'string' || currentMessage.trim().length === 0) {
     throw new Error('Pesan tidak boleh kosong.');
   }
@@ -136,10 +178,13 @@ async function generateContextualReply({ chatId, currentMessage, systemPrompt })
     { role: 'system', content: effectiveSystemPrompt }
   ];
 
-  // Exclude current message if already stored at the tail of history
-  const recentHistory = history.filter(
-    (h) => h.text && h.text.trim().length > 0 && !(h.text === currentMessage && !h.is_from_me)
-  );
+  // Exclude current message if already stored in history
+  const recentHistory = history.filter((h) => {
+    if (!h.text || h.text.trim().length === 0) return false;
+    if (currentMessageId && h.id === currentMessageId) return false;
+    if (!currentMessageId && h.text === currentMessage && !h.is_from_me) return false;
+    return true;
+  });
 
   for (const h of recentHistory) {
     messagesPayload.push({
@@ -148,7 +193,7 @@ async function generateContextualReply({ chatId, currentMessage, systemPrompt })
     });
   }
 
-  // Append current message as the latest prompt
+  // Append current message as the latest user prompt
   messagesPayload.push({
     role: 'user',
     content: currentMessage.trim()
@@ -160,20 +205,26 @@ async function generateContextualReply({ chatId, currentMessage, systemPrompt })
       {
         model: status.activeModel,
         messages: messagesPayload,
+        options: {
+          temperature: 0.6,
+          top_p: 0.9,
+          repeat_penalty: 1.15
+        },
         stream: false
       },
       {
-        timeout: 30000
+        timeout: 90000
       }
     );
 
-    const replyContent = response.data?.message?.content;
-    if (!replyContent || typeof replyContent !== 'string' || replyContent.trim().length === 0) {
+    const rawReply = response.data?.message?.content;
+    const cleaned = cleanAiReplyText(rawReply);
+    if (!cleaned || cleaned.length === 0) {
       throw new Error('Respons AI kosong.');
     }
 
     return {
-      reply: replyContent.trim(),
+      reply: cleaned,
       model: status.activeModel
     };
   } catch (err) {
@@ -190,6 +241,7 @@ async function generateContextualReply({ chatId, currentMessage, systemPrompt })
 module.exports = {
   checkOllamaStatus,
   resolveSystemPrompt,
+  cleanAiReplyText,
   generateAiReply,
   generateContextualReply,
   DEFAULT_SYSTEM_PROMPT

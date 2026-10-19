@@ -461,6 +461,7 @@ class WhatsAppManager {
       // 10. Generate contextual reply with SI BONTOT character
       const aiResult = await generateContextualReply({
         chatId: rawJid,
+        currentMessageId: messageId,
         currentMessage: text
       });
 

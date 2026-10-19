@@ -9,7 +9,7 @@
     "dev": "concurrently -n \"SERVER,CLIENT\" -c \"cyan,magenta\" \"npm run server\" \"npm run client\"",
     "start": "node server/index.js",
     "build": "npm --prefix client run build",
-    "test": "node --test test/*.test.js"
+    "test": "node --test --test-concurrency=1 test/*.test.js"
   },
   "keywords": [
     "whatsapp",

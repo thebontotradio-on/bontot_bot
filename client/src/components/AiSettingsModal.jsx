@@ -49,8 +49,22 @@ export default function AiSettingsModal({ isOpen, onClose, aiStatus, onRefreshAi
     }
   };
 
-  const handleResetDefault = () => {
-    setSystemPrompt('You are a helpful assistant.');
+  const handleResetDefault = async () => {
+    setIsLoading(true);
+    setSaveError(null);
+    try {
+      await api.setSystemPrompt('');
+      const res = await api.getSystemPrompt();
+      if (res.data?.success) {
+        setSystemPrompt(res.data.systemPrompt);
+        setIsSaved(true);
+        setTimeout(() => setIsSaved(false), 3000);
+      }
+    } catch (err) {
+      setSaveError('Gagal mereset ke default.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   if (!isOpen) return null;

@@ -209,10 +209,11 @@ app.post('/api/ai-reply', async (req, res) => {
 // 9. GET /api/settings/system-prompt
 app.get('/api/settings/system-prompt', (req, res) => {
   try {
-    const saved = db.getSetting('ai_system_prompt', DEFAULT_SYSTEM_PROMPT);
+    const saved = db.getSetting('ai_system_prompt');
+    const effective = (saved && saved.trim().length > 0) ? saved.trim() : DEFAULT_SYSTEM_PROMPT;
     res.json({
       success: true,
-      systemPrompt: saved
+      systemPrompt: effective
     });
   } catch (err) {
     res.status(500).json({

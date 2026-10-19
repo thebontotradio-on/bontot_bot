@@ -198,12 +198,12 @@ test('Test 11: Pengiriman manual tetap berfungsi dan menghasilkan objek pesan ya
 });
 
 // 12. Karakter dan Persona SI BONTOT terkonfigurasi benar.
-test('Test 12: System prompt default SI BONTOT memuat identitas THE BONTOT RADIO dan santai', () => {
+test('Test 12: System prompt default SI BONTOT memuat identitas Bang Adhy, THE BONTOT RADIO, dan santai', () => {
   const prompt = resolveSystemPrompt('');
   assert.ok(prompt.includes('SI BONTOT'));
   assert.ok(prompt.includes('THE BONTOT RADIO'));
-  assert.ok(prompt.includes('bahasa Indonesia sehari-hari'));
-  assert.ok(prompt.includes('Jangan menyebut dirimu sebagai manusia'));
+  assert.ok(prompt.includes('Bang Adhy'));
+  assert.ok(prompt.includes('Jangan mengaku sebagai manusia'));
 });
 
 // 13. Controlled test isolation: allowlist membatasi auto-reply hanya ke kontak yang diizinkan
@@ -233,4 +233,68 @@ test('Test 14: Mengosongkan allowlist mengembalikan daftar kosong dengan aman', 
   waManager.setTestAllowlist([]);
   assert.equal(waManager.getTestAllowlist().length, 0);
   assert.equal(waManager.getAutoReplyEnabled(), false);
+});
+
+// 15. Sanitasi output AI (cleanAiReplyText)
+test('Test 15: cleanAiReplyText membersihkan tag berpikir, awalan label AI, dan tanda kutip', () => {
+  const { cleanAiReplyText } = require('../server/ai');
+  assert.equal(cleanAiReplyText('<think>internal thinking</think>Halo Bro!'), 'Halo Bro!');
+  assert.equal(cleanAiReplyText('SI BONTOT: Bang Adhy lagi sibuk kerja nih'), 'Bang Adhy lagi sibuk kerja nih');
+  assert.equal(cleanAiReplyText('AI: Ada yang bisa gw bantu?'), 'Ada yang bisa gw bantu?');
+  assert.equal(cleanAiReplyText('"Siap bantu lu, Bro!"'), 'Siap bantu lu, Bro!');
+  assert.equal(cleanAiReplyText(''), '');
+});
+
+// 16. Respons AI tentang Bang Adhy mewakili beliau dan tidak mengaku sebagai Adhy
+test('Test 16: Respons AI tentang Bang Adhy memposisikan sebagai asisten', async () => {
+  const { generateAiReply } = require('../server/ai');
+  const res = await generateAiReply({
+    message: 'Bang Adhy mana bro?'
+  });
+  assert.ok(res.reply && res.reply.length > 0);
+  assert.ok(res.reply.toLowerCase().includes('adhy') || res.reply.toLowerCase().includes('sibuk') || res.reply.toLowerCase().includes('pesan'));
+  assert.equal(res.model, 'qwen2.5:1.5b');
+});
+
+// 17. Respons AI tentang identitas tidak mengaku sebagai manusia
+test('Test 17: Respons AI tentang identitas jujur sebagai bot AI asisten', async () => {
+  const { generateAiReply } = require('../server/ai');
+  const res = await generateAiReply({
+    message: 'Kamu manusia bukan?'
+  });
+  assert.ok(res.reply && res.reply.length > 0);
+  assert.ok(res.reply.toLowerCase().includes('ai') || res.reply.toLowerCase().includes('bontot') || res.reply.toLowerCase().includes('bukan'));
+});
+
+// 18. Konteks percakapan berlanjut secara alami tanpa sapaan berulang
+test('Test 18: generateContextualReply menyertakan histori obrolan secara terstruktur', async () => {
+  const { generateContextualReply } = require('../server/ai');
+  const testChatId = 'context-test-user@s.whatsapp.net';
+  
+  // Pastikan chat ada di DB
+  db.ensureChatExists(testChatId, 'Teman Obrolan');
+  db.saveMessage({
+    id: `ctx-msg-1-${Date.now()}`,
+    chatId: testChatId,
+    senderJid: testChatId,
+    text: 'Halo Bro',
+    isFromMe: false,
+    timestamp: Math.floor(Date.now() / 1000) - 10
+  });
+  db.saveMessage({
+    id: `ctx-msg-2-${Date.now()}`,
+    chatId: testChatId,
+    senderJid: '6281990918273@s.whatsapp.net',
+    text: 'Halo Bro! Ada yang bisa gw bantu? 😄',
+    isFromMe: true,
+    timestamp: Math.floor(Date.now() / 1000) - 5
+  });
+
+  const res = await generateContextualReply({
+    chatId: testChatId,
+    currentMessage: 'Bang Adhy siaran jam berapa?'
+  });
+
+  assert.ok(res.reply && res.reply.length > 0);
+  assert.ok(res.reply.toLowerCase().includes('tiktok') || res.reply.toLowerCase().includes('malam') || res.reply.toLowerCase().includes('bontot'));
 });
