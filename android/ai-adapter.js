@@ -141,6 +141,12 @@ const server = http.createServer((req, res) => {
           let llamaData = '';
           llamaRes.on('data', c => { llamaData += c; });
           llamaRes.on('end', () => {
+            if (llamaRes.statusCode < 200 || llamaRes.statusCode >= 300) {
+              res.writeHead(llamaRes.statusCode, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: `llama-server HTTP ${llamaRes.statusCode}: ${llamaData}` }));
+              return;
+            }
+
             try {
               const llamaParsed = JSON.parse(llamaData);
               const replyText = llamaParsed.choices?.[0]?.message?.content || '';
@@ -221,6 +227,12 @@ const server = http.createServer((req, res) => {
           let llamaData = '';
           llamaRes.on('data', c => { llamaData += c; });
           llamaRes.on('end', () => {
+            if (llamaRes.statusCode < 200 || llamaRes.statusCode >= 300) {
+              res.writeHead(llamaRes.statusCode, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: `llama-server HTTP ${llamaRes.statusCode}: ${llamaData}` }));
+              return;
+            }
+
             try {
               const llamaParsed = JSON.parse(llamaData);
               const replyText = llamaParsed.choices?.[0]?.message?.content || '';

@@ -250,8 +250,13 @@ test('Test 15: cleanAiReplyText membersihkan tag berpikir, awalan label AI, tand
 });
 
 // 16. Respons AI tentang Bang Adhy memposisikan sebagai asisten dan bebas frasa kaku
-test('Test 16: Respons AI tentang Bang Adhy memposisikan sebagai asisten dan bebas frasa kaku', async () => {
-  const { generateAiReply } = require('../server/ai');
+test('Test 16: Respons AI tentang Bang Adhy memposisikan sebagai asisten dan bebas frasa kaku', async (t) => {
+  const { generateAiReply, checkOllamaStatus } = require('../server/ai');
+  const status = await checkOllamaStatus();
+  if (!status.available) {
+    t.skip('Ollama lokal tidak terdeteksi pada environment ini — pengujian live dilewati.');
+    return;
+  }
   const res = await generateAiReply({
     message: 'Bang Adhy mana bro?'
   });
@@ -263,8 +268,13 @@ test('Test 16: Respons AI tentang Bang Adhy memposisikan sebagai asisten dan beb
 });
 
 // 17. Respons AI tentang identitas tidak mengaku sebagai manusia
-test('Test 17: Respons AI tentang identitas jujur sebagai bot AI asisten', async () => {
-  const { generateAiReply } = require('../server/ai');
+test('Test 17: Respons AI tentang identitas jujur sebagai bot AI asisten', async (t) => {
+  const { generateAiReply, checkOllamaStatus } = require('../server/ai');
+  const status = await checkOllamaStatus();
+  if (!status.available) {
+    t.skip('Ollama lokal tidak terdeteksi pada environment ini — pengujian live dilewati.');
+    return;
+  }
   const res = await generateAiReply({
     message: 'Kamu manusia bukan?'
   });
@@ -273,8 +283,13 @@ test('Test 17: Respons AI tentang identitas jujur sebagai bot AI asisten', async
 });
 
 // 18. Konteks percakapan berlanjut secara alami tanpa sapaan berulang
-test('Test 18: generateContextualReply menyertakan histori obrolan secara terstruktur', async () => {
-  const { generateContextualReply } = require('../server/ai');
+test('Test 18: generateContextualReply menyertakan histori obrolan secara terstruktur', async (t) => {
+  const { generateContextualReply, checkOllamaStatus } = require('../server/ai');
+  const status = await checkOllamaStatus();
+  if (!status.available) {
+    t.skip('Ollama lokal tidak terdeteksi pada environment ini — pengujian live dilewati.');
+    return;
+  }
   const testChatId = 'context-test-user@s.whatsapp.net';
   
   // Pastikan chat ada di DB
@@ -306,8 +321,13 @@ test('Test 18: generateContextualReply menyertakan histori obrolan secara terstr
 });
 
 // 19. Uji pencegahan frasa formal dan verifikasi gaya santai WA
-test('Test 19: Respons AI menolak bahasa kaku/formal dan mengutamakan kata lagi', async () => {
-  const { generateAiReply } = require('../server/ai');
+test('Test 19: Respons AI menolak bahasa kaku/formal dan mengutamakan kata lagi', async (t) => {
+  const { generateAiReply, checkOllamaStatus } = require('../server/ai');
+  const status = await checkOllamaStatus();
+  if (!status.available) {
+    t.skip('Ollama lokal tidak terdeteksi pada environment ini — pengujian live dilewati.');
+    return;
+  }
   const res = await generateAiReply({
     message: 'Bang Adhy bisa dihubungi sekarang?'
   });
@@ -319,8 +339,13 @@ test('Test 19: Respons AI menolak bahasa kaku/formal dan mengutamakan kata lagi'
 });
 
 // 20. Pengujian regresi percakapan berurutan multi-turn (Sehat bro? -> Bro -> Ngapain Bang Adhy? -> Makasih ya)
-test('Test 20: Rangkaian percakapan multi-turn berurutan merespons secara kontekstual, singkat, dan tidak robotik', async () => {
-  const { generateContextualReply } = require('../server/ai');
+test('Test 20: Rangkaian percakapan multi-turn berurutan merespons secara kontekstual, singkat, dan tidak robotik', async (t) => {
+  const { generateContextualReply, checkOllamaStatus } = require('../server/ai');
+  const status = await checkOllamaStatus();
+  if (!status.available) {
+    t.skip('Ollama lokal tidak terdeteksi pada environment ini — pengujian live dilewati.');
+    return;
+  }
   const seqChatId = `multi-turn-test-${Date.now()}@s.whatsapp.net`;
   db.ensureChatExists(seqChatId, 'Budi');
 

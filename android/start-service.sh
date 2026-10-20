@@ -143,6 +143,69 @@ service_status() {
     else
         echo -e "HTTP 11434 (AI Tags)    : \033[0;33mOFFLINE / SIAGA\033[0m"
     fi
+
+    local http_8080
+    http_8080=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://127.0.0.1:8080/health 2>/dev/null || echo "000")
+    if [ "$http_8080" = "200" ]; then
+        echo -e "HTTP 8080 (Llama Engine): \033[0;32mONLINE (200 OK - Siap Inferensi)\033[0m"
+    elif [ "$http_8080" = "503" ]; then
+        echo -e "HTTP 8080 (Llama Engine): \033[1;33mMEMUAT MODEL KE RAM (503 LOADING)\033[0m"
+    else
+        echo -e "HTTP 8080 (Llama Engine): \033[0;31mOFFLINE (HTTP $http_8080)\033[0m"
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Sub-fungsi: Helper Manajemen Engine Llama & Adapter
+# ------------------------------------------------------------------------------
+ensure_llama_server() {
+    local LLAMA_BIN
+    LLAMA_BIN=$(find_llama_server 2>/dev/null || true)
+    local MODEL_FILE
+    MODEL_FILE=$(find_model_file 2>/dev/null || true)
+
+    if [ -n "$LLAMA_BIN" ] && [ -n "$MODEL_FILE" ] && [ -f "$MODEL_FILE" ]; then
+        if ! check_and_clean_stale_pid "$LLAMA_PID_FILE" "llama"; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA] Menjalankan llama-server lokal pada port 8080..." >> "$LOG_FILE"
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA] Binary: $LLAMA_BIN | Model: $(basename "$MODEL_FILE") ($(du -h "$MODEL_FILE" 2>/dev/null | cut -f1))" >> "$LOG_FILE"
+            "$LLAMA_BIN" \
+                -m "$MODEL_FILE" \
+                --host 127.0.0.1 \
+                --port 8080 \
+                -c 2048 \
+                -t 4 \
+                -b 256 \
+                -np 1 \
+                --n-gpu-layers 0 \
+                >> "$PROJECT_DIR/logs/llama.log" 2>&1 &
+            local LLAMA_PID=$!
+            echo "$LLAMA_PID" > "$LLAMA_PID_FILE"
+
+            sleep 1
+            if ! is_pid_alive "$LLAMA_PID"; then
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA ERROR] llama-server langsung mati setelah diluncurkan! Periksa logs/llama.log" >> "$LOG_FILE"
+                rm -f "$LLAMA_PID_FILE"
+            else
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA] llama-server aktif dengan PID $LLAMA_PID." >> "$LOG_FILE"
+            fi
+        fi
+    else
+        if [ -z "$LLAMA_BIN" ]; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA] llama-server binary belum terpasang. Jalankan 'bash android/setup-llama.sh' untuk memasang." >> "$LOG_FILE"
+        elif [ -z "$MODEL_FILE" ]; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA] Berkas model GGUF belum ditemukan di models/. Jalankan 'bash android/download-ai-model.sh'." >> "$LOG_FILE"
+        fi
+    fi
+}
+
+ensure_ai_adapter() {
+    if [ -f "$PROJECT_DIR/android/ai-adapter.js" ]; then
+        if ! check_and_clean_stale_pid "$AI_PID_FILE" "ai_adapter"; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ADAPTER] Menjalankan AI Adapter (Port 11434)..." >> "$LOG_FILE"
+            node "$PROJECT_DIR/android/ai-adapter.js" >> "$AI_LOG_FILE" 2>&1 &
+            echo $! > "$AI_PID_FILE"
+        fi
+    fi
 }
 
 # ------------------------------------------------------------------------------
@@ -275,36 +338,10 @@ run_supervisor() {
     fi
 
     # 3. Jalankan Llama-server C++ (jika terpasang & model tersedia)
-    local LLAMA_BIN
-    LLAMA_BIN=$(find_llama_server 2>/dev/null || true)
-    local MODEL_FILE
-    MODEL_FILE=$(find_model_file 2>/dev/null || true)
-
-    if [ -n "$LLAMA_BIN" ] && [ -n "$MODEL_FILE" ] && [ -f "$MODEL_FILE" ]; then
-        if ! check_and_clean_stale_pid "$LLAMA_PID_FILE" "llama"; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA] Menjalankan llama-server lokal pada port 8080..." >> "$LOG_FILE"
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA] Binary: $LLAMA_BIN | Model: $(basename "$MODEL_FILE") ($(du -h "$MODEL_FILE" 2>/dev/null | cut -f1))" >> "$LOG_FILE"
-            "$LLAMA_BIN" -m "$MODEL_FILE" --host 127.0.0.1 --port 8080 -c 2048 -t 4 -b 256 -np 1 >> "$PROJECT_DIR/logs/llama.log" 2>&1 &
-            local LLAMA_PID=$!
-            echo "$LLAMA_PID" > "$LLAMA_PID_FILE"
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA] llama-server aktif dengan PID $LLAMA_PID." >> "$LOG_FILE"
-        fi
-    else
-        if [ -z "$LLAMA_BIN" ]; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA] llama-server binary belum terpasang. Jalankan 'bash android/setup-llama.sh' untuk memasang." >> "$LOG_FILE"
-        elif [ -z "$MODEL_FILE" ]; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA] Berkas model GGUF belum ditemukan di models/. Jalankan 'bash android/download-ai-model.sh'." >> "$LOG_FILE"
-        fi
-    fi
+    ensure_llama_server
 
     # 4. Jalankan AI Engine Adapter (Port 11434) secara tunggal jika belum aktif
-    if [ -f "$PROJECT_DIR/android/ai-adapter.js" ]; then
-        if ! check_and_clean_stale_pid "$AI_PID_FILE" "ai_adapter"; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ADAPTER] Menjalankan AI Adapter (Port 11434)..." >> "$LOG_FILE"
-            node "$PROJECT_DIR/android/ai-adapter.js" >> "$AI_LOG_FILE" 2>&1 &
-            echo $! > "$AI_PID_FILE"
-        fi
-    fi
+    ensure_ai_adapter
 
     # 5. Uji Kesiapan Sistem Sebelum Server Diluncurkan
     if [ -f "$PROJECT_DIR/android/check-readiness.sh" ]; then
@@ -324,6 +361,10 @@ run_supervisor() {
     WINDOW_START=$(date +%s)
 
     while [ "$SHUTDOWN_TRIGGERED" -eq 0 ]; do
+        # Pastikan proses pendukung AI tetap hidup sebelum/selama siklus server
+        ensure_llama_server
+        ensure_ai_adapter
+
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUPERVISOR] Meluncurkan Node.js Server..." >> "$LOG_FILE"
         
         export NODE_ENV=production

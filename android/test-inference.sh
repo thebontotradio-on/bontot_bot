@@ -22,18 +22,43 @@ echo ""
 FAIL_COUNT=0
 
 # ------------------------------------------------------------------------------
-# 1. Uji Status Engine Llama (Port 8080)
+# 1. Uji Status Engine Llama (Port 8080) dengan Polling Kesiapan Model
 # ------------------------------------------------------------------------------
 echo -e "${BOLD}[1/4] Menguji Kesiapan Llama Engine (Port 8080)...${NC}"
-LLAMA_HEALTH_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://127.0.0.1:8080/health 2>/dev/null || echo "000")
-LLAMA_HEALTH_BODY=$(curl -s --max-time 3 http://127.0.0.1:8080/health 2>/dev/null || echo "")
+LLAMA_READY=0
+POLL_RETRY=0
+MAX_POLL=8
 
-if [ "$LLAMA_HEALTH_CODE" = "200" ]; then
-    echo -e "  - Llama Engine /health: ${GREEN}HTTP 200 OK${NC} -> $LLAMA_HEALTH_BODY"
-else
+while [ "$POLL_RETRY" -lt "$MAX_POLL" ]; do
+    POLL_RETRY=$((POLL_RETRY + 1))
+    LLAMA_HEALTH_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://127.0.0.1:8080/health 2>/dev/null || echo "000")
+    LLAMA_HEALTH_BODY=$(curl -s --max-time 3 http://127.0.0.1:8080/health 2>/dev/null || echo "")
+
+    if [ "$LLAMA_HEALTH_CODE" = "200" ]; then
+        echo -e "  - Llama Engine /health: ${GREEN}HTTP 200 OK${NC} -> $LLAMA_HEALTH_BODY"
+        LLAMA_READY=1
+        break
+    elif [ "$LLAMA_HEALTH_CODE" = "503" ]; then
+        echo -e "  - Llama Engine /health: ${YELLOW}HTTP 503 (Model sedang dimuat ke RAM... coba lagi dalam 2 detik)${NC}"
+        sleep 2
+    else
+        if [ "$POLL_RETRY" -eq 1 ]; then
+            echo "  - Menunggu Llama Engine online di 127.0.0.1:8080..."
+        fi
+        sleep 2
+    fi
+done
+
+if [ "$LLAMA_READY" -eq 0 ]; then
     echo -e "  - Llama Engine /health: ${RED}GAGAL (HTTP $LLAMA_HEALTH_CODE)${NC}"
-    echo "    Penyebab: llama-server belum berjalan atau masih memuat model."
-    echo "    Periksa log di: $PROJECT_DIR/logs/llama.log"
+    echo "    Penyebab: llama-server belum berjalan atau mengalami crash saat memuat model."
+    echo "    --- Cuplikan Log Terakhir: $PROJECT_DIR/logs/llama.log ---"
+    if [ -f "$PROJECT_DIR/logs/llama.log" ]; then
+        tail -n 15 "$PROJECT_DIR/logs/llama.log"
+    else
+        echo "    (Berkas log llama.log belum ada)"
+    fi
+    echo "    --------------------------------------------------------"
     FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
 
@@ -49,8 +74,13 @@ if [ "$TAGS_CODE" = "200" ] && echo "$TAGS_BODY" | grep -q '"name":'; then
     MODEL_ACTIVE=$(echo "$TAGS_BODY" | grep -o '"name":"[^"]*"' | head -n 1 | cut -d'"' -f4)
     echo -e "  - Adapter GET /api/tags: ${GREEN}HTTP 200 OK${NC} (Model aktif terdeteksi: ${CYAN}${MODEL_ACTIVE}${NC})"
 else
-    echo -e "  - Adapter GET /api/tags: ${RED}GAGAL atau Model Kosong${NC}"
+    echo -e "  - Adapter GET /api/tags: ${RED}GAGAL atau Model Kosong (HTTP $TAGS_CODE)${NC}"
     echo "    Respons Payload: $TAGS_BODY"
+    if [ -f "$PROJECT_DIR/logs/ai.log" ]; then
+        echo "    --- Cuplikan Log Terakhir: $PROJECT_DIR/logs/ai.log ---"
+        tail -n 10 "$PROJECT_DIR/logs/ai.log"
+        echo "    -----------------------------------------------------"
+    fi
     FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
 
@@ -64,7 +94,7 @@ echo "Mengirim prompt: 'Halo! Siapa namamu?'..."
 ADAPTER_CHAT_PAYLOAD='{"model":"qwen2.5:0.5b","messages":[{"role":"system","content":"Kamu adalah asisten ramah."},{"role":"user","content":"Halo! Siapa namamu?"}],"options":{"num_predict":30,"temperature":0.3}}'
 
 T_START=$(date +%s)
-CHAT_RESP=$(curl -s --max-time 30 -X POST http://127.0.0.1:11434/api/chat \
+CHAT_RESP=$(curl -s --max-time 45 -X POST http://127.0.0.1:11434/api/chat \
     -H "Content-Type: application/json" \
     -d "$ADAPTER_CHAT_PAYLOAD" 2>/dev/null || echo "FAIL")
 T_END=$(date +%s)
@@ -93,7 +123,7 @@ echo "Mengirim pesan WhatsApp tiruan: 'Ngapain Bang Adhy?'..."
 
 BACKEND_AI_PAYLOAD='{"message":"Ngapain Bang Adhy?"}'
 
-BACKEND_RESP=$(curl -s --max-time 30 -X POST http://127.0.0.1:3001/api/ai-reply \
+BACKEND_RESP=$(curl -s --max-time 45 -X POST http://127.0.0.1:3001/api/ai-reply \
     -H "Content-Type: application/json" \
     -d "$BACKEND_AI_PAYLOAD" 2>/dev/null || echo "FAIL")
 
