@@ -2,6 +2,7 @@
 # ==============================================================================
 # SI BONTOT — Native Llama Engine Installer (Android ARM64 / Termux)
 # Biaya: Rp0 | 100% Bebas Kartu Kredit | Tanpa PRoot (Native C++ ARM64)
+# Prioritas: Binary Precompiled Resmi Tanpa Ketergantungan Kompilasi CMake
 # ==============================================================================
 
 PROJECT_DIR="${1:-$HOME/wa-bontot}"
@@ -36,9 +37,9 @@ find_llama_server() {
         return 0
     fi
     for p in \
+        "$PROJECT_DIR/bin/llama-server" \
         "$PREFIX/bin/llama-server" \
         "/data/data/com.termux/files/usr/bin/llama-server" \
-        "$PROJECT_DIR/bin/llama-server" \
         "$HOME/llama.cpp/build/bin/llama-server" \
         "$HOME/llama.cpp/llama-server"; do
         if [ -x "$p" ]; then
@@ -51,7 +52,12 @@ find_llama_server() {
 
 test_binary_executable() {
     local bin_path="$1"
-    [ -n "$bin_path" ] && [ -x "$bin_path" ] && ("$bin_path" -h >/dev/null 2>&1 || "$bin_path" --version >/dev/null 2>&1)
+    if [ -n "$bin_path" ] && [ -x "$bin_path" ]; then
+        # Eksekusi singkat flag bantuan/versi untuk memverifikasi kompatibilitas libc/symbol
+        "$bin_path" -h >/dev/null 2>&1 || "$bin_path" --version >/dev/null 2>&1
+        return $?
+    fi
+    return 1
 }
 
 find_model_file() {
@@ -68,87 +74,124 @@ find_model_file() {
     return 1
 }
 
-# 2. Cek apakah llama-server sudah terpasang dan dapat dieksekusi
+download_official_prebuilt() {
+    echo -e "\n${YELLOW}[Metode Prebuilt] Mengunduh binary resmi ARM64 Android dari GitHub release (ggml-org/llama.cpp)...${NC}"
+    mkdir -p "$PROJECT_DIR/bin" "$PROJECT_DIR/scratch"
+    local ARCHIVE="$PROJECT_DIR/scratch/llama-android-arm64.tar.gz"
+    
+    # URL binary resmi Android ARM64 release terverifikasi (Bionic ABI kompatibel)
+    local OFFICIAL_RELEASE_URL="https://github.com/ggml-org/llama.cpp/releases/download/b11669/llama-b11669-bin-android-arm64.tar.gz"
+    
+    echo "Mengunduh paket binary resmi: $OFFICIAL_RELEASE_URL"
+    if curl -L -C - --progress-bar -o "$ARCHIVE" "$OFFICIAL_RELEASE_URL"; then
+        echo "Mengekstrak binary ke folder proyek..."
+        rm -rf "$PROJECT_DIR/scratch/extracted"
+        mkdir -p "$PROJECT_DIR/scratch/extracted"
+        tar -xzf "$ARCHIVE" -C "$PROJECT_DIR/scratch/extracted" 2>/dev/null || tar -xf "$ARCHIVE" -C "$PROJECT_DIR/scratch/extracted"
+        
+        local FOUND_BIN
+        FOUND_BIN=$(find "$PROJECT_DIR/scratch/extracted" -type f -name "llama-server" 2>/dev/null | head -n 1)
+        
+        if [ -n "$FOUND_BIN" ] && [ -f "$FOUND_BIN" ]; then
+            cp "$FOUND_BIN" "$PROJECT_DIR/bin/llama-server"
+            chmod +x "$PROJECT_DIR/bin/llama-server"
+            
+            # Salin library pendukung jika ada
+            find "$PROJECT_DIR/scratch/extracted" -type f -name "*.so*" -exec cp {} "$PROJECT_DIR/bin/" \; 2>/dev/null || true
+            if [ -d "$PREFIX/lib" ]; then
+                find "$PROJECT_DIR/scratch/extracted" -type f -name "*.so*" -exec cp {} "$PREFIX/lib/" \; 2>/dev/null || true
+            fi
+            
+            # Verifikasi binary hasil ekstraksi
+            if test_binary_executable "$PROJECT_DIR/bin/llama-server"; then
+                echo -e "${GREEN}✔ Prebuilt binary llama-server berhasil dipasang dan lulus uji eksekusi!${NC}"
+                rm -f "$ARCHIVE"
+                rm -rf "$PROJECT_DIR/scratch/extracted"
+                return 0
+            fi
+        fi
+    fi
+    echo -e "${YELLOW}[INFO] Unduhan binary prebuilt belum berhasil. Memeriksa alternatif repositori...${NC}"
+    return 1
+}
+
+# 2. Cek apakah llama-server fungsional sudah terpasang
 EXISTING_BIN=$(find_llama_server 2>/dev/null || true)
 if [ -n "$EXISTING_BIN" ] && test_binary_executable "$EXISTING_BIN"; then
     echo -e "${GREEN}✔ Binary llama-server fungsional sudah terpasang di: $EXISTING_BIN${NC}"
+    echo "Versi: $("$EXISTING_BIN" --version 2>/dev/null || echo 'llama-server ARM64')"
 else
-    echo -e "\n${YELLOW}[Metode 1] Mengaktifkan Termux User Repository (tur-repo) dan memasang llama-cpp...${NC}"
-    echo "Catatan: Paket llama-cpp di Termux resmi dikelola oleh tur-repo."
+    INSTALLED=0
 
-    # Pastikan tur-repo terpasang untuk menyediakan llama-cpp
+    # Prioritas 1: Paket resmi Termux tur-repo
+    echo -e "\n${YELLOW}[Prioritas 1] Mencoba instalasi paket resmi Termux User Repository (tur-repo)...${NC}"
     pkg install -y tur-repo < /dev/null 2>&1 || true
     pkg update -y < /dev/null 2>&1 || true
     pkg install -y llama-cpp < /dev/null 2>&1 || true
 
     EXISTING_BIN=$(find_llama_server 2>/dev/null || true)
     if [ -n "$EXISTING_BIN" ] && test_binary_executable "$EXISTING_BIN"; then
-        echo -e "${GREEN}✔ Paket llama-cpp berhasil dipasang via package manager Termux (tur-repo).${NC}"
-    else
-        echo -e "\n${YELLOW}[Metode 2] Paket pkg tur-repo belum tersedia di mirror aktif.${NC}"
-        echo "Mempersiapkan kompilasi C++ native resmi ggml-org/llama.cpp (ARM64 Optimized)..."
+        echo -e "${GREEN}✔ Paket llama-cpp berhasil dipasang via package manager Termux.${NC}"
+        INSTALLED=1
+    fi
 
-        # Install compiler toolchain
-        pkg update -y < /dev/null 2>&1 || true
-        pkg install -y git cmake clang make libandroid-spawn < /dev/null 2>&1 || true
+    # Prioritas 2: Unduh Prebuilt Official Binary (Bypass CMake & toolchain rusak)
+    if [ "$INSTALLED" -eq 0 ]; then
+        if download_official_prebuilt; then
+            INSTALLED=1
+        fi
+    fi
 
-        SRC_DIR="$HOME/llama.cpp"
-        if [ ! -d "$SRC_DIR" ]; then
-            echo "Mengunduh kode sumber resmi ggml-org/llama.cpp..."
-            git clone --depth 1 https://github.com/ggml-org/llama.cpp.git "$SRC_DIR" < /dev/null 2>&1 || {
-                echo -e "${RED}[GAGAL] Gagal mengunduh repositori llama.cpp. Periksa koneksi internet.${NC}"
-                exit 1
-            }
+    # Prioritas 3: Kompilasi C++ Native HANYA JIKA toolchain CMake terbukti sehat
+    if [ "$INSTALLED" -eq 0 ]; then
+        echo -e "\n${YELLOW}[Prioritas 3] Memeriksa kelayakan toolchain kompilasi lokal...${NC}"
+        
+        # Audit apakah cmake mengalami symbol linker error seperti yang dilaporkan
+        if ! cmake --version >/dev/null 2>&1; then
+            echo -e "${RED}[DIAGNOSTIK] cmake di Termux mengalami symbol linker error atau tidak kompatibel.${NC}"
+            echo -e "${YELLOW}Kompilasi lokal dilewati demi mencegah crash linker yang berulang.${NC}"
         else
-            echo "Repositori $SRC_DIR sudah ada, melanjutkan konfigurasi build..."
-        fi
+            echo "Toolchain CMake terdeteksi sehat. Mempersiapkan kompilasi native C++..."
+            pkg install -y git clang make libandroid-spawn < /dev/null 2>&1 || true
 
-        echo "Mengonfigurasi build CMake untuk target llama-server..."
-        cmake -B "$SRC_DIR/build" -S "$SRC_DIR" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DLLAMA_BUILD_TESTS=OFF \
-            -DLLAMA_BUILD_EXAMPLES=OFF \
-            -DLLAMA_BUILD_SERVER=ON \
-            -DLLAMA_CURL=OFF
-
-        # Di smartphone RAM 4GB, batasi ke 2 thread agar tidak memicu OOM Killer
-        BUILD_JOBS=2
-        TOTAL_RAM_KB=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo 4000000)
-        if [ "$TOTAL_RAM_KB" -lt 3000000 ]; then
-            BUILD_JOBS=1
-        fi
-
-        echo "Membangun binary llama-server (menggunakan $BUILD_JOBS parallel jobs untuk stabilitas RAM)..."
-        cmake --build "$SRC_DIR/build" --target llama-server -j"$BUILD_JOBS"
-
-        mkdir -p "$PROJECT_DIR/bin"
-        if [ -f "$SRC_DIR/build/bin/llama-server" ]; then
-            cp "$SRC_DIR/build/bin/llama-server" "$PROJECT_DIR/bin/llama-server"
-            chmod +x "$PROJECT_DIR/bin/llama-server"
-            if [ -n "$PREFIX" ] && [ -d "$PREFIX/bin" ]; then
-                cp "$SRC_DIR/build/bin/llama-server" "$PREFIX/bin/llama-server" 2>/dev/null || true
-                chmod +x "$PREFIX/bin/llama-server" 2>/dev/null || true
+            SRC_DIR="$HOME/llama.cpp"
+            if [ ! -d "$SRC_DIR" ]; then
+                git clone --depth 1 https://github.com/ggml-org/llama.cpp.git "$SRC_DIR" < /dev/null 2>&1 || true
             fi
-            echo -e "${GREEN}✔ Kompilasi llama-server berhasil selesai!${NC}"
-        else
-            echo -e "${RED}[GAGAL KRITIS] Kompilasi selesai tetapi binary llama-server tidak terbentuk.${NC}"
-            exit 1
+
+            if [ -d "$SRC_DIR" ]; then
+                cmake -B "$SRC_DIR/build" -S "$SRC_DIR" \
+                    -DCMAKE_BUILD_TYPE=Release \
+                    -DLLAMA_BUILD_TESTS=OFF \
+                    -DLLAMA_BUILD_EXAMPLES=OFF \
+                    -DLLAMA_BUILD_SERVER=ON \
+                    -DLLAMA_CURL=OFF
+
+                cmake --build "$SRC_DIR/build" --target llama-server -j2
+                if [ -f "$SRC_DIR/build/bin/llama-server" ]; then
+                    mkdir -p "$PROJECT_DIR/bin"
+                    cp "$SRC_DIR/build/bin/llama-server" "$PROJECT_DIR/bin/llama-server"
+                    chmod +x "$PROJECT_DIR/bin/llama-server"
+                    INSTALLED=1
+                fi
+            fi
         fi
     fi
 fi
 
-# 3. Verifikasi Eksekusi Binary Nyata
+# 3. Verifikasi Eksekusi Binary Nyata Sebelum Melanjutkan
 LLAMA_EXEC=$(find_llama_server 2>/dev/null || true)
 if [ -z "$LLAMA_EXEC" ] || [ ! -x "$LLAMA_EXEC" ]; then
-    echo -e "${RED}[GAGAL KRITIS] Binary llama-server tidak ditemukan di path mana pun.${NC}"
+    echo -e "${RED}[GAGAL KRITIS] Binary llama-server tidak berhasil dipasang.${NC}"
+    echo "Harap pastikan koneksi internet aktif untuk mengunduh paket resmi."
     exit 1
 fi
 
 if ! test_binary_executable "$LLAMA_EXEC"; then
-    echo -e "${RED}[GAGAL KRITIS] Binary $LLAMA_EXEC ditemukan tetapi gagal dieksekusi (exit code non-zero).${NC}"
+    echo -e "${RED}[GAGAL KRITIS] Binary $LLAMA_EXEC ditemukan tetapi tidak dapat dieksekusi oleh OS Android Bionic.${NC}"
     exit 1
 fi
-echo -e "${GREEN}✔ Binary tervalidasi dan siap dieksekusi: $LLAMA_EXEC${NC}"
+echo -e "${GREEN}✔ Binary tervalidasi dan siap digunakan: $LLAMA_EXEC${NC}"
 
 # 4. Verifikasi Berkas Model GGUF
 echo -e "\n${YELLOW}Memeriksa berkas model AI di $PROJECT_DIR/models/...${NC}"
@@ -157,7 +200,7 @@ MODEL_FILE=$(find_model_file 2>/dev/null || true)
 
 if [ -n "$MODEL_FILE" ] && [ -f "$MODEL_FILE" ]; then
     MODEL_SIZE_STR=$(du -h "$MODEL_FILE" | cut -f1)
-    echo -e "${GREEN}✔ Model GGUF ditemukan: $(basename "$MODEL_FILE") [${MODEL_SIZE_STR}].${NC}"
+    echo -e "${GREEN}✔ Model GGUF terdeteksi: $(basename "$MODEL_FILE") [${MODEL_SIZE_STR}].${NC}"
 else
     echo "Berkas model GGUF belum ditemukan di $PROJECT_DIR/models/."
     echo "Mengunduh model resmi Qwen 2.5 0.5B Instruct GGUF..."
@@ -169,7 +212,7 @@ else
     fi
 fi
 
-# 5. Restart Layanan Bot untuk Mengaktifkan Engine
+# 5. Restart Layanan Bot untuk Mengaktifkan Engine Persisten
 echo -e "\n${CYAN}Memulai ulang layanan SI BONTOT untuk memuat Llama Engine...${NC}"
 bash "$PROJECT_DIR/android/start-service.sh" restart
 

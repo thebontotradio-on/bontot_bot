@@ -46,21 +46,27 @@ check_and_clean_stale_pid() {
 }
 
 find_llama_server() {
-    if command -v llama-server >/dev/null 2>&1; then
-        command -v llama-server
-        return 0
-    fi
     for p in \
-        "/data/data/com.termux/files/usr/bin/llama-server" \
+        "$PROJECT_DIR/bin/llama-server" \
         "$PREFIX/bin/llama-server" \
+        "/data/data/com.termux/files/usr/bin/llama-server" \
         "$HOME/llama.cpp/build/bin/llama-server" \
-        "$HOME/llama.cpp/llama-server" \
-        "$PROJECT_DIR/bin/llama-server"; do
-        if [ -x "$p" ]; then
-            echo "$p"
-            return 0
+        "$HOME/llama.cpp/llama-server"; do
+        if [ -n "$p" ] && [ -x "$p" ]; then
+            if "$p" -h >/dev/null 2>&1 || "$p" --version >/dev/null 2>&1; then
+                echo "$p"
+                return 0
+            fi
         fi
     done
+    if command -v llama-server >/dev/null 2>&1; then
+        local cmd_bin
+        cmd_bin=$(command -v llama-server)
+        if [ -x "$cmd_bin" ] && ("$cmd_bin" -h >/dev/null 2>&1 || "$cmd_bin" --version >/dev/null 2>&1); then
+            echo "$cmd_bin"
+            return 0
+        fi
+    fi
     return 1
 }
 

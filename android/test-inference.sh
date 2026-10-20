@@ -22,9 +22,49 @@ echo ""
 FAIL_COUNT=0
 
 # ------------------------------------------------------------------------------
+# 0. Audit Binary & Versi llama-server
+# ------------------------------------------------------------------------------
+echo -e "${BOLD}[1/5] Memeriksa Eksekusi Binary & Versi llama-server...${NC}"
+find_llama_server() {
+    for p in \
+        "$PROJECT_DIR/bin/llama-server" \
+        "$PREFIX/bin/llama-server" \
+        "/data/data/com.termux/files/usr/bin/llama-server" \
+        "$HOME/llama.cpp/build/bin/llama-server" \
+        "$HOME/llama.cpp/llama-server"; do
+        if [ -n "$p" ] && [ -x "$p" ]; then
+            if "$p" -h >/dev/null 2>&1 || "$p" --version >/dev/null 2>&1; then
+                echo "$p"
+                return 0
+            fi
+        fi
+    done
+    if command -v llama-server >/dev/null 2>&1; then
+        local cmd_bin
+        cmd_bin=$(command -v llama-server)
+        if [ -x "$cmd_bin" ] && ("$cmd_bin" -h >/dev/null 2>&1 || "$cmd_bin" --version >/dev/null 2>&1); then
+            echo "$cmd_bin"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+LLAMA_BIN=$(find_llama_server 2>/dev/null || echo "")
+if [ -n "$LLAMA_BIN" ]; then
+    VERSION_OUTPUT=$("$LLAMA_BIN" --version 2>/dev/null || "$LLAMA_BIN" -h 2>/dev/null | head -n 2 | tr '\n' ' ' || echo "llama-server ARM64")
+    echo -e "  - Lokasi Binary : ${CYAN}$LLAMA_BIN${NC}"
+    echo -e "  - Output Versi  : ${GREEN}$VERSION_OUTPUT${NC}"
+else
+    echo -e "  - Lokasi Binary : ${RED}TIDAK DITEMUKAN / TIDAK EXECUTABLE${NC}"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+# ------------------------------------------------------------------------------
 # 1. Uji Status Engine Llama (Port 8080) dengan Polling Kesiapan Model
 # ------------------------------------------------------------------------------
-echo -e "${BOLD}[1/4] Menguji Kesiapan Llama Engine (Port 8080)...${NC}"
+echo ""
+echo -e "${BOLD}[2/5] Menguji Kesiapan Llama Engine HTTP (Port 8080)...${NC}"
 LLAMA_READY=0
 POLL_RETRY=0
 MAX_POLL=8
@@ -66,7 +106,7 @@ fi
 # 2. Uji Status AI Adapter (Port 11434)
 # ------------------------------------------------------------------------------
 echo ""
-echo -e "${BOLD}[2/4] Menguji AI Adapter Ollama Bridge (Port 11434)...${NC}"
+echo -e "${BOLD}[3/5] Menguji AI Adapter Ollama Bridge (Port 11434)...${NC}"
 TAGS_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://127.0.0.1:11434/api/tags 2>/dev/null || echo "000")
 TAGS_BODY=$(curl -s --max-time 3 http://127.0.0.1:11434/api/tags 2>/dev/null || echo "")
 
@@ -88,7 +128,7 @@ fi
 # 3. Uji Inferensi Nyata Langsung Melalui AI Adapter (Port 11434)
 # ------------------------------------------------------------------------------
 echo ""
-echo -e "${BOLD}[3/4] Menguji Inferensi Teks via AI Adapter (Port 11434)...${NC}"
+echo -e "${BOLD}[4/5] Menguji Inferensi Teks via AI Adapter (Port 11434)...${NC}"
 echo "Mengirim prompt: 'Halo! Siapa namamu?'..."
 
 ADAPTER_CHAT_PAYLOAD='{"model":"qwen2.5:0.5b","messages":[{"role":"system","content":"Kamu adalah asisten ramah."},{"role":"user","content":"Halo! Siapa namamu?"}],"options":{"num_predict":30,"temperature":0.3}}'
@@ -118,7 +158,7 @@ fi
 # 4. Uji Inferensi Nyata via Backend SI BONTOT (Port 3001)
 # ------------------------------------------------------------------------------
 echo ""
-echo -e "${BOLD}[4/4] Menguji Draf AI Persona SI BONTOT via Backend (Port 3001)...${NC}"
+echo -e "${BOLD}[5/5] Menguji Draf AI Persona SI BONTOT via Backend (Port 3001)...${NC}"
 echo "Mengirim pesan WhatsApp tiruan: 'Ngapain Bang Adhy?'..."
 
 BACKEND_AI_PAYLOAD='{"message":"Ngapain Bang Adhy?"}'
