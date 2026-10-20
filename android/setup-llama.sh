@@ -2,7 +2,7 @@
 # ==============================================================================
 # SI BONTOT — Native Llama Engine Installer (Android ARM64 / Termux)
 # Biaya: Rp0 | 100% Bebas Kartu Kredit | Tanpa PRoot (Native C++ ARM64)
-# Prioritas: Binary Precompiled Resmi Tanpa Ketergantungan Kompilasi CMake
+# Prioritas: Binary Precompiled ARM64 Bionic Resmi Tanpa Kompilasi CMake
 # ==============================================================================
 
 PROJECT_DIR="${1:-$HOME/wa-bontot}"
@@ -32,21 +32,27 @@ fi
 echo -e "${GREEN}✔ Arsitektur ARM64 terverifikasi.${NC}"
 
 find_llama_server() {
-    if command -v llama-server >/dev/null 2>&1; then
-        command -v llama-server
-        return 0
-    fi
     for p in \
         "$PROJECT_DIR/bin/llama-server" \
         "$PREFIX/bin/llama-server" \
         "/data/data/com.termux/files/usr/bin/llama-server" \
         "$HOME/llama.cpp/build/bin/llama-server" \
         "$HOME/llama.cpp/llama-server"; do
-        if [ -x "$p" ]; then
-            echo "$p"
-            return 0
+        if [ -n "$p" ] && [ -x "$p" ]; then
+            if "$p" -h >/dev/null 2>&1 || "$p" --version >/dev/null 2>&1; then
+                echo "$p"
+                return 0
+            fi
         fi
     done
+    if command -v llama-server >/dev/null 2>&1; then
+        local cmd_bin
+        cmd_bin=$(command -v llama-server)
+        if [ -x "$cmd_bin" ] && ("$cmd_bin" -h >/dev/null 2>&1 || "$cmd_bin" --version >/dev/null 2>&1); then
+            echo "$cmd_bin"
+            return 0
+        fi
+    fi
     return 1
 }
 
@@ -75,14 +81,14 @@ find_model_file() {
 }
 
 download_official_prebuilt() {
-    echo -e "\n${YELLOW}[Metode Prebuilt] Mengunduh binary resmi ARM64 Android dari GitHub release (ggml-org/llama.cpp)...${NC}"
+    echo -e "\n${YELLOW}[Jalur Prebuilt] Mengunduh binary resmi ARM64 Android dari GitHub release (ggml-org/llama.cpp)...${NC}"
     mkdir -p "$PROJECT_DIR/bin" "$PROJECT_DIR/scratch"
     local ARCHIVE="$PROJECT_DIR/scratch/llama-android-arm64.tar.gz"
     
     # URL binary resmi Android ARM64 release terverifikasi (Bionic ABI kompatibel)
     local OFFICIAL_RELEASE_URL="https://github.com/ggml-org/llama.cpp/releases/download/b11669/llama-b11669-bin-android-arm64.tar.gz"
     
-    echo "Mengunduh paket binary resmi: $OFFICIAL_RELEASE_URL"
+    echo "Sumber paket: $OFFICIAL_RELEASE_URL"
     if curl -L -C - --progress-bar -o "$ARCHIVE" "$OFFICIAL_RELEASE_URL"; then
         echo "Mengekstrak binary ke folder proyek..."
         rm -rf "$PROJECT_DIR/scratch/extracted"
@@ -102,6 +108,12 @@ download_official_prebuilt() {
                 find "$PROJECT_DIR/scratch/extracted" -type f -name "*.so*" -exec cp {} "$PREFIX/lib/" \; 2>/dev/null || true
             fi
             
+            # Salin ke PREFIX/bin jika memungkinkan untuk akses global
+            if [ -n "$PREFIX" ] && [ -d "$PREFIX/bin" ]; then
+                cp "$PROJECT_DIR/bin/llama-server" "$PREFIX/bin/llama-server" 2>/dev/null || true
+                chmod +x "$PREFIX/bin/llama-server" 2>/dev/null || true
+            fi
+
             # Verifikasi binary hasil ekstraksi
             if test_binary_executable "$PROJECT_DIR/bin/llama-server"; then
                 echo -e "${GREEN}✔ Prebuilt binary llama-server berhasil dipasang dan lulus uji eksekusi!${NC}"
@@ -111,7 +123,7 @@ download_official_prebuilt() {
             fi
         fi
     fi
-    echo -e "${YELLOW}[INFO] Unduhan binary prebuilt belum berhasil. Memeriksa alternatif repositori...${NC}"
+    echo -e "${YELLOW}[PERINGATAN] Gagal mengunduh atau memverifikasi paket prebuilt binary.${NC}"
     return 1
 }
 
@@ -123,67 +135,41 @@ if [ -n "$EXISTING_BIN" ] && test_binary_executable "$EXISTING_BIN"; then
 else
     INSTALLED=0
 
-    # Prioritas 1: Paket resmi Termux tur-repo
-    echo -e "\n${YELLOW}[Prioritas 1] Mencoba instalasi paket resmi Termux User Repository (tur-repo)...${NC}"
-    pkg install -y tur-repo < /dev/null 2>&1 || true
-    pkg update -y < /dev/null 2>&1 || true
-    pkg install -y llama-cpp < /dev/null 2>&1 || true
-
-    EXISTING_BIN=$(find_llama_server 2>/dev/null || true)
-    if [ -n "$EXISTING_BIN" ] && test_binary_executable "$EXISTING_BIN"; then
-        echo -e "${GREEN}✔ Paket llama-cpp berhasil dipasang via package manager Termux.${NC}"
+    # Prioritas 1: Prebuilt Official Android ARM64 Binary (Paling cepat, 100% bebas dari CMake/toolchain rusak)
+    echo -e "\n${YELLOW}[Prioritas 1] Memasang binary resmi ARM64 Android Bionic (precompiled)...${NC}"
+    if download_official_prebuilt; then
         INSTALLED=1
     fi
 
-    # Prioritas 2: Unduh Prebuilt Official Binary (Bypass CMake & toolchain rusak)
+    # Prioritas 2: Paket resmi Termux tur-repo (jika prebuilt gagal karena jaringan)
     if [ "$INSTALLED" -eq 0 ]; then
-        if download_official_prebuilt; then
+        echo -e "\n${YELLOW}[Prioritas 2] Mencoba instalasi paket repositori Termux (tur-repo + llama-cpp)...${NC}"
+        pkg install -y tur-repo < /dev/null 2>&1 || true
+        pkg update -y < /dev/null 2>&1 || true
+        pkg install -y llama-cpp < /dev/null 2>&1 || true
+
+        EXISTING_BIN=$(find_llama_server 2>/dev/null || true)
+        if [ -n "$EXISTING_BIN" ] && test_binary_executable "$EXISTING_BIN"; then
+            echo -e "${GREEN}✔ Paket llama-cpp berhasil dipasang via package manager Termux.${NC}"
             INSTALLED=1
         fi
     fi
 
-    # Prioritas 3: Kompilasi C++ Native HANYA JIKA toolchain CMake terbukti sehat
+    # JANGAN PERNAH MASUK KE CMAKE KOMPILASI KARENA SUDAH TERBUKTI LINKER ERROR
     if [ "$INSTALLED" -eq 0 ]; then
-        echo -e "\n${YELLOW}[Prioritas 3] Memeriksa kelayakan toolchain kompilasi lokal...${NC}"
-        
-        # Audit apakah cmake mengalami symbol linker error seperti yang dilaporkan
-        if ! cmake --version >/dev/null 2>&1; then
-            echo -e "${RED}[DIAGNOSTIK] cmake di Termux mengalami symbol linker error atau tidak kompatibel.${NC}"
-            echo -e "${YELLOW}Kompilasi lokal dilewati demi mencegah crash linker yang berulang.${NC}"
-        else
-            echo "Toolchain CMake terdeteksi sehat. Mempersiapkan kompilasi native C++..."
-            pkg install -y git clang make libandroid-spawn < /dev/null 2>&1 || true
-
-            SRC_DIR="$HOME/llama.cpp"
-            if [ ! -d "$SRC_DIR" ]; then
-                git clone --depth 1 https://github.com/ggml-org/llama.cpp.git "$SRC_DIR" < /dev/null 2>&1 || true
-            fi
-
-            if [ -d "$SRC_DIR" ]; then
-                cmake -B "$SRC_DIR/build" -S "$SRC_DIR" \
-                    -DCMAKE_BUILD_TYPE=Release \
-                    -DLLAMA_BUILD_TESTS=OFF \
-                    -DLLAMA_BUILD_EXAMPLES=OFF \
-                    -DLLAMA_BUILD_SERVER=ON \
-                    -DLLAMA_CURL=OFF
-
-                cmake --build "$SRC_DIR/build" --target llama-server -j2
-                if [ -f "$SRC_DIR/build/bin/llama-server" ]; then
-                    mkdir -p "$PROJECT_DIR/bin"
-                    cp "$SRC_DIR/build/bin/llama-server" "$PROJECT_DIR/bin/llama-server"
-                    chmod +x "$PROJECT_DIR/bin/llama-server"
-                    INSTALLED=1
-                fi
-            fi
-        fi
+        echo -e "\n${RED}[GAGAL KRITIS] Tidak dapat memasang binary llama-server yang kompatibel.${NC}"
+        echo "1. Unduhan binary resmi prebuilt ARM64 tidak berhasil diselesaikan."
+        echo "2. Paket repositori Termux llama-cpp tidak tersedia di mirror saat ini."
+        echo "3. Kompilasi lokal CMake ditiadakan karena cmake di Termux Anda mengalami symbol linker error."
+        echo "Solusi: Pastikan koneksi internet di HP Anda aktif, lalu jalankan ulang perintah pembaruan."
+        exit 1
     fi
 fi
 
 # 3. Verifikasi Eksekusi Binary Nyata Sebelum Melanjutkan
 LLAMA_EXEC=$(find_llama_server 2>/dev/null || true)
 if [ -z "$LLAMA_EXEC" ] || [ ! -x "$LLAMA_EXEC" ]; then
-    echo -e "${RED}[GAGAL KRITIS] Binary llama-server tidak berhasil dipasang.${NC}"
-    echo "Harap pastikan koneksi internet aktif untuk mengunduh paket resmi."
+    echo -e "${RED}[GAGAL KRITIS] Binary llama-server tidak ditemukan di sistem.${NC}"
     exit 1
 fi
 
