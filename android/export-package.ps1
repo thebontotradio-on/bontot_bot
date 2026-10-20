@@ -24,11 +24,26 @@ $TempDir = "$RootPath\scratch\bundle_temp"
 if (Test-Path $TempDir) { Remove-Item $TempDir -Recurse -Force }
 New-Item -ItemType Directory -Path "$TempDir\wa-bontot" | Out-Null
 
+# 3b. Validasi sintaks seluruh berkas server sebelum dimasukkan ke dalam bundle
+Write-Host "Memeriksa sintaks seluruh berkas JavaScript server..." -ForegroundColor Cyan
+$ServerFiles = @("index.js", "whatsapp.js", "ai.js", "db.js", "utils.js")
+foreach ($sf in $ServerFiles) {
+    $filePath = "$RootPath\server\$sf"
+    if (-not (Test-Path $filePath)) {
+        Write-Error "[FATAL] Berkas server\$sf tidak ditemukan!"
+        exit 1
+    }
+    $syntaxOutput = & node --check $filePath 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "[FATAL] Berkas server\$sf memiliki syntax error! $syntaxOutput"
+        exit 1
+    }
+}
+Write-Host "[OK] Seluruh berkas server lolos uji sintaks node --check." -ForegroundColor Green
+
 # 4. Salin HANYA berkas JavaScript server (JAMINAN 100% BEBAS DARI auth_session DAN wabontot.db)
 New-Item -ItemType Directory -Path "$TempDir\wa-bontot\server" -Force | Out-Null
 
-
-$ServerFiles = @("index.js", "whatsapp.js", "ai.js", "db.js", "utils.js")
 foreach ($sf in $ServerFiles) {
     Copy-Item "$RootPath\server\$sf" "$TempDir\wa-bontot\server\$sf" -Force
 }
@@ -68,6 +83,42 @@ Get-ChildItem -Path $BaseDir -Recurse -File | ForEach-Object {
 $ZipArchive.Dispose()
 Remove-Item $TempDir -Recurse -Force
 
+# 10. Verifikasi Integritas Bundle ZIP yang Dihasilkan
+Write-Host "Memverifikasi integritas berkas di dalam bundle ZIP..." -ForegroundColor Cyan
+$VerifyZip = [System.IO.Compression.ZipFile]::OpenRead($DistZip)
+$ServerIndexEntry = $VerifyZip.Entries | Where-Object { $_.FullName -eq "server/index.js" }
+if (-not $ServerIndexEntry) {
+    $VerifyZip.Dispose()
+    Write-Error "[FATAL] server/index.js tidak ditemukan di dalam berkas ZIP!"
+    exit 1
+}
+
+$OriginalSize = (Get-Item "$RootPath\server\index.js").Length
+if ($ServerIndexEntry.Length -ne $OriginalSize) {
+    $VerifyZip.Dispose()
+    Write-Error "[FATAL] Ukuran server/index.js di dalam ZIP ($($ServerIndexEntry.Length)) tidak cocok dengan sumber ($OriginalSize)!"
+    exit 1
+}
+
+# Verifikasi sintaks isi ZIP secara nyata
+$Stream = $ServerIndexEntry.Open()
+$Reader = New-Object System.IO.StreamReader($Stream)
+$ExtractedContent = $Reader.ReadToEnd()
+$Reader.Close()
+$Stream.Close()
+$VerifyZip.Dispose()
+
+$TempCheckFile = "$RootPath\scratch\verify_zip_server_index.js"
+[System.IO.File]::WriteAllText($TempCheckFile, $ExtractedContent, [System.Text.Encoding]::UTF8)
+$ZipSyntaxCheck = & node --check $TempCheckFile 2>&1
+$SyntaxExit = $LASTEXITCODE
+Remove-Item $TempCheckFile -Force -ErrorAction SilentlyContinue
+
+if ($SyntaxExit -ne 0) {
+    Write-Error "[FATAL] server/index.js yang diekstrak dari ZIP mengalami syntax error! $ZipSyntaxCheck"
+    exit 1
+}
+Write-Host "[OK] server/index.js di dalam ZIP terverifikasi identik dan lulus uji node --check." -ForegroundColor Green
 
 $ZipSize = [math]::Round(((Get-Item $DistZip).Length / 1MB), 2)
 Write-Host "[OK] Bundle mandiri bersih berhasil dibuat: $DistZip ($ZipSize MB)" -ForegroundColor Green

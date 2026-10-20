@@ -20,11 +20,14 @@ else
     echo "[OK] Node.js terdeteksi: $NODE_VER"
 fi
 
-# 2. Cek Berkas Server Inti
+# 2. Cek Berkas Server Inti & Sintaks
 REQUIRED_SERVER_FILES=("server/index.js" "server/whatsapp.js" "server/ai.js" "server/db.js" "server/utils.js")
 for f in "${REQUIRED_SERVER_FILES[@]}"; do
     if [ ! -f "$f" ]; then
         echo "[GAGAL] Berkas penting tidak ditemukan: $f"
+        ERRORS=$((ERRORS + 1))
+    elif ! node --check "$f" >/dev/null 2>&1; then
+        echo "[GAGAL] Berkas $f memiliki kesalahan sintaks (syntax error)!"
         ERRORS=$((ERRORS + 1))
     fi
 done

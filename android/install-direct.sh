@@ -184,13 +184,20 @@ if [ "$SOURCE_READY" -eq 0 ] && [ ! -f "$PROJECT_DIR/server/index.js" ]; then
     fi
 fi
 
-# 5D. Verifikasi Akhir Tahap 5: Jangan pernah berasumsi berhasil jika berkas utama tidak ada
+# 5D. Verifikasi Akhir Tahap 5: Jangan pernah berasumsi berhasil jika berkas utama tidak ada atau rusak
 if [ ! -f "$PROJECT_DIR/server/index.js" ] || [ ! -f "$PROJECT_DIR/package.json" ]; then
     echo -e "${RED}[GAGAL KRITIS] Berkas server/index.js atau package.json tidak ditemukan di $PROJECT_DIR.${NC}"
     echo -e "${RED}Tahap 5/8 gagal menyediakan kode sumber SI BONTOT. Instalasi dihentikan.${NC}"
     exit 1
 fi
-echo -e "${GREEN}✔ Kode sumber SI BONTOT lengkap dan terverifikasi di $PROJECT_DIR.${NC}"
+
+echo "Memeriksa sintaks kode sumber server/index.js..."
+if ! node --check "$PROJECT_DIR/server/index.js" >/dev/null 2>&1; then
+    echo -e "${RED}[GAGAL KRITIS] Berkas server/index.js corrupt atau mengalami syntax error!${NC}"
+    echo -e "${RED}Instalasi dihentikan karena berkas backend tidak dapat dieksekusi.${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✔ Kode sumber SI BONTOT lengkap dan sintaks server/index.js terverifikasi di $PROJECT_DIR.${NC}"
 
 
 # 6. INSTALASI DEPENDENSI NPM & KOMPILASI NATIVE BETTER-SQLITE3
@@ -272,7 +279,31 @@ chmod +x "$PROJECT_DIR/android/"*.sh 2>/dev/null || true
 echo -e "\n${CYAN}==================================================================${NC}"
 echo -e "${CYAN}             MENJALANKAN VALIDASI KELAYAKAN SISTEM                ${NC}"
 echo -e "${CYAN}==================================================================${NC}"
-bash "$PROJECT_DIR/android/validate-installation.sh" "$PROJECT_DIR" < /dev/null || true
+
+# Validasi Wajib 1: Pemeriksaan Sintaks server/index.js (Mandatory Syntax Guard)
+echo "Memeriksa sintaks server/index.js sebelum finalisasi..."
+if ! node --check "$PROJECT_DIR/server/index.js" < /dev/null 2>&1; then
+    echo -e "\n${RED}${BOLD}=================================================================="
+    echo "       ❌ INSTALASI GAGAL: server/index.js MEMILIKI SYNTAX ERROR  "
+    echo "==================================================================${NC}"
+    echo -e "${RED}Berkas server/index.js tidak lolos uji node --check.${NC}"
+    echo -e "${YELLOW}Instalasi ditandai GAGAL dan bot tidak boleh dijalankan.${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✔ Validasi wajib: server/index.js valid & bebas syntax error.${NC}"
+
+# Validasi Wajib 2: Seluruh 8 Pilar Sistem
+VALIDATE_EXIT=0
+bash "$PROJECT_DIR/android/validate-installation.sh" "$PROJECT_DIR" < /dev/null || VALIDATE_EXIT=$?
+
+if [ "$VALIDATE_EXIT" -ne 0 ]; then
+    echo -e "\n${RED}${BOLD}=================================================================="
+    echo "         ❌ INSTALASI SI BONTOT GAGAL / BELUM TUNTAS ❌          "
+    echo "==================================================================${NC}"
+    echo -e "${RED}Validasi sistem mendeteksi kegagalan pada komponen SI BONTOT.${NC}"
+    echo -e "${YELLOW}Periksa rincian kegagalan di atas sebelum memulai bot.${NC}"
+    exit 1
+fi
 
 # TAMPILKAN ALAMAT IP LOKAL & PANDUAN AKSES (PORTABLE POSIX PARSING)
 WIFI_IP=$(ifconfig wlan0 2>/dev/null | awk '/inet / {print $2}' || true)

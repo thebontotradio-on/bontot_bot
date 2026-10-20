@@ -30,8 +30,13 @@ echo "Lokasi: $PROJECT_DIR"
 echo "--------------------------------------------------------"
 
 # 1. Validasi Backend Files & Syntax
-node --check server/index.js >/dev/null 2>&1
-check_result "1. Backend Syntax" $? "server/index.js valid & bebas syntax error"
+SYNTAX_FAIL=0
+for f in "server/index.js" "server/whatsapp.js" "server/ai.js" "server/db.js" "server/utils.js"; do
+    if [ ! -f "$f" ] || ! node --check "$f" >/dev/null 2>&1; then
+        SYNTAX_FAIL=$((SYNTAX_FAIL + 1))
+    fi
+done
+check_result "1. Backend Syntax" $SYNTAX_FAIL "Seluruh berkas server/*.js valid & bebas syntax error"
 
 # 2. Validasi Dashboard Web Statis
 if [ -f "client/dist/index.html" ] && [ -s "client/dist/index.html" ]; then
