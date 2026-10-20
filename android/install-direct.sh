@@ -233,31 +233,40 @@ if [ "$NEED_NPM_INSTALL" -eq 1 ]; then
     fi
 fi
 
-# 7. UNDUH MODEL AI LOKAL (QWEN 2.5 0.5B INSTRUCT GGUF)
-echo -e "\n${YELLOW}[7/8] Menyiapkan Asisten AI Lokal (Qwen 0.5B GGUF)...${NC}"
-MODEL_FILE="$PROJECT_DIR/models/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+# 7. UNDUH MODEL AI LOKAL & SETUP LLAMA ENGINE
+echo -e "\n${YELLOW}[7/8] Menyiapkan Asisten AI Lokal (Qwen 0.5B GGUF & Llama Engine)...${NC}"
+mkdir -p "$PROJECT_DIR/models"
+MODEL_FILE=$(ls -S "$PROJECT_DIR/models/"*.gguf 2>/dev/null | head -n 1 || echo "")
 OFFICIAL_AI_URL="https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
 
 MODEL_READY=0
-if [ -f "$MODEL_FILE" ]; then
+if [ -n "$MODEL_FILE" ] && [ -f "$MODEL_FILE" ]; then
     MODEL_SIZE=$(wc -c < "$MODEL_FILE" 2>/dev/null || echo 0)
-    if [ "$MODEL_SIZE" -gt 390000000 ]; then
+    if [ "$MODEL_SIZE" -gt 350000000 ]; then
         MODEL_READY=1
     fi
 fi
 
 if [ "$MODEL_READY" -eq 1 ]; then
     MODEL_SIZE_STR=$(du -h "$MODEL_FILE" 2>/dev/null | cut -f1)
-    echo -e "${GREEN}✔ Model AI Qwen 0.5B sudah terpasang [${MODEL_SIZE_STR}].${NC}"
+    echo -e "${GREEN}✔ Model AI Qwen 0.5B sudah terpasang [${MODEL_SIZE_STR}] ($(basename "$MODEL_FILE")).${NC}"
 else
+    MODEL_FILE="$PROJECT_DIR/models/qwen2.5-0.5b-instruct-q4_k_m.gguf"
     echo "Mengunduh model resmi dari Hugging Face (Alibaba Qwen, ~398 MB)..."
     echo "Tautan: $OFFICIAL_AI_URL"
     if curl -L -C - --progress-bar -o "$MODEL_FILE" "$OFFICIAL_AI_URL" < /dev/null; then
         MODEL_SIZE_STR=$(du -h "$MODEL_FILE" 2>/dev/null | cut -f1)
         echo -e "${GREEN}✔ Model AI berhasil diunduh dan diverifikasi [${MODEL_SIZE_STR}].${NC}"
+        MODEL_READY=1
     else
         echo -e "${YELLOW}[PERINGATAN] Unduhan model belum selesai. Dashboard akan tetap aktif dengan status 'AI Offline'.${NC}"
     fi
+fi
+
+# Pastikan binary llama-server terpasang
+if ! command -v llama-server >/dev/null 2>&1 && [ ! -x "$PROJECT_DIR/bin/llama-server" ] && [ ! -x "$PREFIX/bin/llama-server" ]; then
+    echo "Menyiapkan engine inferensi lokal llama-server..."
+    pkg install -y llama-cpp < /dev/null 2>/dev/null || true
 fi
 
 # 8. KONFIGURASI AUTOSTART TERMUX:BOOT & WATCHDOG

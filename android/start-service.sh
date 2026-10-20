@@ -45,6 +45,39 @@ check_and_clean_stale_pid() {
     return 1
 }
 
+find_llama_server() {
+    if command -v llama-server >/dev/null 2>&1; then
+        command -v llama-server
+        return 0
+    fi
+    for p in \
+        "/data/data/com.termux/files/usr/bin/llama-server" \
+        "$PREFIX/bin/llama-server" \
+        "$HOME/llama.cpp/build/bin/llama-server" \
+        "$HOME/llama.cpp/llama-server" \
+        "$PROJECT_DIR/bin/llama-server"; do
+        if [ -x "$p" ]; then
+            echo "$p"
+            return 0
+        fi
+    done
+    return 1
+}
+
+find_model_file() {
+    if [ -f "$PROJECT_DIR/models/qwen2.5-0.5b-instruct-q4_k_m.gguf" ]; then
+        echo "$PROJECT_DIR/models/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+        return 0
+    fi
+    local found
+    found=$(ls -S "$PROJECT_DIR/models/"*.gguf 2>/dev/null | head -n 1)
+    if [ -n "$found" ] && [ -f "$found" ]; then
+        echo "$found"
+        return 0
+    fi
+    return 1
+}
+
 # ------------------------------------------------------------------------------
 # Sub-fungsi: Status Layanan
 # ------------------------------------------------------------------------------
@@ -76,10 +109,21 @@ service_status() {
     fi
 
     # Llama Server
+    local llama_bin
+    llama_bin=$(find_llama_server 2>/dev/null || echo "")
+    local model_file
+    model_file=$(find_model_file 2>/dev/null || echo "")
+
     if check_and_clean_stale_pid "$LLAMA_PID_FILE" "llama"; then
         echo -e "Llama Engine (8080) : \033[0;32mBERJALAN\033[0m (PID: $(cat "$LLAMA_PID_FILE"))"
     else
-        echo -e "Llama Engine (8080) : \033[0;33mOFFLINE (GGUF di disk)\033[0m"
+        if [ -n "$llama_bin" ] && [ -n "$model_file" ]; then
+            echo -e "Llama Engine (8080) : \033[0;33mBERHENTI\033[0m (Binary & Model siap)"
+        elif [ -n "$model_file" ]; then
+            echo -e "Llama Engine (8080) : \033[0;33mOFFLINE\033[0m (Model GGUF di disk, binary belum terpasang -> jalankan bash android/setup-llama.sh)"
+        else
+            echo -e "Llama Engine (8080) : \033[0;31mOFFLINE\033[0m (Binary / Model belum ada)"
+        fi
     fi
 
     echo ""
@@ -231,15 +275,26 @@ run_supervisor() {
     fi
 
     # 3. Jalankan Llama-server C++ (jika terpasang & model tersedia)
-    local MODEL_FILE="$PROJECT_DIR/models/qwen2.5-0.5b-instruct-q4_k_m.gguf"
-    if command -v llama-server >/dev/null 2>&1 && [ -f "$MODEL_FILE" ]; then
+    local LLAMA_BIN
+    LLAMA_BIN=$(find_llama_server 2>/dev/null || true)
+    local MODEL_FILE
+    MODEL_FILE=$(find_model_file 2>/dev/null || true)
+
+    if [ -n "$LLAMA_BIN" ] && [ -n "$MODEL_FILE" ] && [ -f "$MODEL_FILE" ]; then
         if ! check_and_clean_stale_pid "$LLAMA_PID_FILE" "llama"; then
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA] Menjalankan llama-server lokal pada port 8080..." >> "$LOG_FILE"
-            llama-server -m "$MODEL_FILE" --host 127.0.0.1 --port 8080 -c 2048 -t 4 >> "$PROJECT_DIR/logs/llama.log" 2>&1 &
-            echo $! > "$LLAMA_PID_FILE"
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA] Binary: $LLAMA_BIN | Model: $(basename "$MODEL_FILE") ($(du -h "$MODEL_FILE" 2>/dev/null | cut -f1))" >> "$LOG_FILE"
+            "$LLAMA_BIN" -m "$MODEL_FILE" --host 127.0.0.1 --port 8080 -c 2048 -t 4 -b 256 -np 1 >> "$PROJECT_DIR/logs/llama.log" 2>&1 &
+            local LLAMA_PID=$!
+            echo "$LLAMA_PID" > "$LLAMA_PID_FILE"
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA] llama-server aktif dengan PID $LLAMA_PID." >> "$LOG_FILE"
         fi
     else
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA] llama-server binary tidak aktif di Termux. AI Engine berstatus Standby/Offline (Backend & WhatsApp tetap 100% aktif)." >> "$LOG_FILE"
+        if [ -z "$LLAMA_BIN" ]; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA] llama-server binary belum terpasang. Jalankan 'bash android/setup-llama.sh' untuk memasang." >> "$LOG_FILE"
+        elif [ -z "$MODEL_FILE" ]; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA] Berkas model GGUF belum ditemukan di models/. Jalankan 'bash android/download-ai-model.sh'." >> "$LOG_FILE"
+        fi
     fi
 
     # 4. Jalankan AI Engine Adapter (Port 11434) secara tunggal jika belum aktif

@@ -92,6 +92,21 @@ test('Server Integrity: ai-adapter.js handles signals and server error gracefull
   assert.ok(adapterContent.includes("process.on('SIGHUP'"), 'ai-adapter.js must handle SIGHUP');
 });
 
+test('Server Integrity: setup-llama.sh and test-inference.sh exist and implement required logic', () => {
+  const setupLlama = path.join(__dirname, '../android/setup-llama.sh');
+  assert.ok(fs.existsSync(setupLlama), 'setup-llama.sh must exist');
+  const setupContent = fs.readFileSync(setupLlama, 'utf8');
+  assert.ok(setupContent.includes('llama-cpp'), 'Must support pkg install llama-cpp');
+  assert.ok(setupContent.includes('cmake'), 'Must support cmake source fallback');
+
+  const testInference = path.join(__dirname, '../android/test-inference.sh');
+  assert.ok(fs.existsSync(testInference), 'test-inference.sh must exist');
+  const inferenceContent = fs.readFileSync(testInference, 'utf8');
+  assert.ok(inferenceContent.includes('http://127.0.0.1:8080/health'), 'Must test 8080 health');
+  assert.ok(inferenceContent.includes('http://127.0.0.1:11434/api/chat'), 'Must test 11434 chat inference');
+  assert.ok(inferenceContent.includes('http://127.0.0.1:3001/api/ai-reply'), 'Must test 3001 draft inference');
+});
+
 test('Server Integrity: si-bontot-android-bundle.zip matches source server/index.js exactly', () => {
   const zipPath = path.join(__dirname, '../si-bontot-android-bundle.zip');
   assert.ok(fs.existsSync(zipPath), 'si-bontot-android-bundle.zip must exist');
@@ -109,3 +124,4 @@ test('Server Integrity: si-bontot-android-bundle.zip matches source server/index
   const zipEntryLength = parseInt(output, 10);
   assert.equal(zipEntryLength, sourceContent.length, 'server/index.js in ZIP must match source size exactly');
 });
+
