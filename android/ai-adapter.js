@@ -136,10 +136,37 @@ const server = http.createServer((req, res) => {
   res.end(JSON.stringify({ error: 'Endpoint tidak ditemukan' }));
 });
 
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`[${new Date().toISOString()}] [AI-Adapter ERROR] Port ${PORT} sudah digunakan oleh proses lain!`);
+    process.exit(1);
+  } else {
+    console.error(`[${new Date().toISOString()}] [AI-Adapter ERROR]`, err);
+  }
+});
+
+process.on('SIGTERM', () => {
+  console.log(`[${new Date().toISOString()}] [AI-Adapter] Menerima SIGTERM. Menutup server adapter...`);
+  server.close(() => process.exit(0));
+});
+
+process.on('SIGINT', () => {
+  console.log(`[${new Date().toISOString()}] [AI-Adapter] Menerima SIGINT. Menutup server adapter...`);
+  server.close(() => process.exit(0));
+});
+
+process.on('SIGHUP', () => {
+  console.log(`[${new Date().toISOString()}] [AI-Adapter] SIGHUP diterima, mengabaikan sinyal agar tetap aktif di latar belakang.`);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error(`[${new Date().toISOString()}] [AI-Adapter FATAL]`, err.message);
+});
+
 // Start listening if executed directly
 if (require.main === module || !process.env.TEST_ENV) {
   server.listen(PORT, '127.0.0.1', () => {
-    console.log(`[AI-Adapter Android] Berjalan di http://127.0.0.1:${PORT}`);
+    console.log(`[${new Date().toISOString()}] [AI-Adapter Android] Berjalan di http://127.0.0.1:${PORT}`);
     console.log(`[AI-Adapter Android] Menghubungkan ke llama-server di ${getLlamaHost()}:${getLlamaPort()}`);
   });
 }

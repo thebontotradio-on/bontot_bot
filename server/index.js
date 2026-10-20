@@ -360,20 +360,59 @@ if (fs.existsSync(clientDistPath)) {
 
 // Start server with EADDRINUSE handling
 server.listen(PORT, () => {
-  console.log(`[WA BONTOT Backend] Berjalan di http://localhost:${PORT}`);
+  const mem = process.memoryUsage();
+  console.log(`[${new Date().toISOString()}] [STARTUP] WA BONTOT Backend berjalan di http://localhost:${PORT}`);
+  console.log(`[STARTUP] PID: ${process.pid} | Node: ${process.version} | Platform: ${process.platform}-${process.arch}`);
+  console.log(`[STARTUP] Memori RSS: ${Math.round(mem.rss / 1024 / 1024)}MB | Heap: ${Math.round(mem.heapUsed / 1024 / 1024)}MB`);
   // Requirement: Default MUST be OFF after implementation and on server restart
   waManager.setAutoReplyEnabled(false);
+  console.log(`[STARTUP] Auto-Reply: OFF (Default Aman)`);
   // Initialize WhatsApp connection
   waManager.init();
 });
 
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
-    console.error(`[ERROR] Port ${PORT} sudah digunakan oleh aplikasi lain!`);
-    console.error(`Silakan tutup proses yang sedang memakai port ${PORT} atau jalankan dengan PORT berbeda (misal: PORT=3002).`);
-    console.error(`Catatan: Jika Anda mengubah port backend atau environment variable, pastikan restart aplikasi dan sesuaikan VITE_API_BASE_URL di client/.env.local`);
+    console.error(`[${new Date().toISOString()}] [ERROR] Port ${PORT} sudah digunakan oleh aplikasi lain!`);
+    console.error(`Silakan periksa proses lama atau jalankan dengan PORT berbeda.`);
     process.exit(1);
   } else {
-    console.error('[ERROR Backend]', err);
+    console.error(`[${new Date().toISOString()}] [ERROR Backend]`, err);
   }
+});
+
+// Graceful Shutdown & Process Signal Handling
+function handleGracefulShutdown(signal) {
+  console.log(`[${new Date().toISOString()}] [SHUTDOWN] Menerima sinyal ${signal}. Memulai penutupan server dengan aman...`);
+  try {
+    waManager.cleanupSocket();
+  } catch (e) {
+    // Silently continue
+  }
+  server.close(() => {
+    console.log(`[${new Date().toISOString()}] [SHUTDOWN] HTTP & Socket.IO server ditutup normal.`);
+    process.exit(0);
+  });
+
+  setTimeout(() => {
+    console.warn(`[${new Date().toISOString()}] [SHUTDOWN] Batas waktu penutupan habis (5s). Memaksa keluar.`);
+    process.exit(0);
+  }, 5000).unref();
+}
+
+process.on('SIGTERM', () => handleGracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => handleGracefulShutdown('SIGINT'));
+process.on('SIGHUP', () => {
+  console.log(`[${new Date().toISOString()}] [SIGNAL] SIGHUP diterima: terminal ditutup/backgrounded. Server tetap berjalan.`);
+});
+
+// Uncaught Exception & Rejection Guard
+process.on('uncaughtException', (err) => {
+  console.error(`[${new Date().toISOString()}] [FATAL UNCAUGHT EXCEPTION]`, err.message);
+  if (err.stack) console.error(err.stack);
+});
+
+process.on('unhandledRejection', (reason) => {
+  const msg = reason instanceof Error ? reason.message : String(reason);
+  console.error(`[${new Date().toISOString()}] [UNHANDLED REJECTION]`, msg);
 });

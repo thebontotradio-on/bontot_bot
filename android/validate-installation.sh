@@ -58,17 +58,17 @@ check_result "3. Database SQLite" $? "better-sqlite3 read/write transaction berf
 node --check android/ai-adapter.js >/dev/null 2>&1
 check_result "4. AI Adapter Syntax" $? "android/ai-adapter.js siap menjembatani port 11434"
 
-# 5. Validasi Model AI Lokal
+# 5. Validasi Berkas Model AI Lokal di Disk (Storage Guard)
 MODEL_FILE="models/qwen2.5-0.5b-instruct-q4_k_m.gguf"
 if [ -f "$MODEL_FILE" ]; then
     MODEL_SIZE=$(wc -c < "$MODEL_FILE" 2>/dev/null || echo 0)
     if [ "$MODEL_SIZE" -gt 350000000 ]; then
-        check_result "5. Model AI GGUF" 0 "Model Qwen 0.5B terpasang ($(du -h $MODEL_FILE | cut -f1))"
+        check_result "5. Model AI GGUF (Storage)" 0 "Berkas model Qwen 0.5B terverifikasi di disk ($(du -h $MODEL_FILE | cut -f1)) [Inferensi aktif membutuhkan llama-server]"
     else
-        check_result "5. Model AI GGUF" 1 "Berkas model corrupt/kurang dari 350 MB"
+        check_result "5. Model AI GGUF (Storage)" 1 "Berkas model corrupt/kurang dari 350 MB"
     fi
 else
-    check_result "5. Model AI GGUF" 1 "Model belum diunduh ke $MODEL_FILE (dapat diunduh via script)"
+    check_result "5. Model AI GGUF (Storage)" 1 "Model belum diunduh ke $MODEL_FILE (dapat diunduh via script)"
 fi
 
 # 6. Validasi Skrip Backup
@@ -90,7 +90,7 @@ if [ -f \$PID_FILE ]; then rm -f \$PID_FILE; exit 0; else exit 1; fi
 " >/dev/null 2>&1
 check_result "7. Watchdog PID Lock" $? "Mekanisme penguncian PID berfungsi normal"
 
-# 8. Validasi Port Jaringan Bebas Konflik
+# 8. Validasi Port Jaringan & Uji Respons HTTP Nyata
 PORT_3001_FREE=0
 PORT_11434_FREE=0
 if node -e "const s = require('net').createServer().listen(3001, () => s.close());" >/dev/null 2>&1; then
@@ -101,9 +101,15 @@ if node -e "const s = require('net').createServer().listen(11434, () => s.close(
 fi
 
 if [ "$PORT_3001_FREE" -eq 1 ] && [ "$PORT_11434_FREE" -eq 1 ]; then
-    check_result "8. Port Availability" 0 "Port 3001 & 11434 siap digunakan"
+    check_result "8. Port & HTTP Service" 0 "Port 3001 & 11434 bebas & siap digunakan"
 else
-    check_result "8. Port Availability" 0 "Port sedang digunakan oleh service aktif (normal jika server sudah jalan)"
+    # Port sedang terpakai, uji apakah layanan merespons HTTP 200 secara nyata
+    HTTP_3001_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://127.0.0.1:3001/api/status 2>/dev/null || echo "000")
+    if [ "$HTTP_3001_CODE" = "200" ]; then
+        check_result "8. Port & HTTP Service" 0 "Backend aktif & merespons HTTP 200 OK pada port 3001"
+    else
+        check_result "8. Port & HTTP Service" 1 "Port 3001 terpakai tetapi backend tidak merespons HTTP 200 (Code: $HTTP_3001_CODE)"
+    fi
 fi
 
 echo "--------------------------------------------------------"
