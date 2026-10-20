@@ -35,12 +35,12 @@ test_binary_executable() {
 
     local test_out
     local exit_code=0
-    test_out=$("$bin_path" -h 2>&1) || exit_code=$?
+    test_out=$(env -u LD_PRELOAD "$bin_path" -h 2>&1) || exit_code=$?
     if [ -z "$test_out" ]; then
-        test_out=$("$bin_path" --help 2>&1) || exit_code=$?
+        test_out=$(env -u LD_PRELOAD "$bin_path" --help 2>&1) || exit_code=$?
     fi
     if [ -z "$test_out" ]; then
-        test_out=$("$bin_path" 2>&1 | head -n 25) || exit_code=$?
+        test_out=$(env -u LD_PRELOAD "$bin_path" 2>&1 | head -n 25) || exit_code=$?
     fi
 
     # Deteksi kegagalan linker Bionic libc Android / ketidakcocokan arsitektur
@@ -110,7 +110,7 @@ find_llama_server() {
 
 LLAMA_BIN=$(find_llama_server 2>/dev/null || echo "")
 if [ -n "$LLAMA_BIN" ]; then
-    VERSION_OUTPUT=$("$LLAMA_BIN" -h 2>&1 | head -n 2 | tr '\n' ' ' || echo "llama-server ARM64")
+    VERSION_OUTPUT=$(env -u LD_PRELOAD "$LLAMA_BIN" -h 2>&1 | head -n 2 | tr '\n' ' ' || echo "llama-server ARM64")
     echo -e "  - Lokasi Binary : ${CYAN}$LLAMA_BIN${NC}"
     echo -e "  - Output Versi  : ${GREEN}$VERSION_OUTPUT${NC}"
 else

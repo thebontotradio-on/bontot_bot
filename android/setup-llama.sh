@@ -47,12 +47,12 @@ test_binary_executable() {
 
     local test_out
     local exit_code=0
-    test_out=$("$bin_path" -h 2>&1) || exit_code=$?
+    test_out=$(env -u LD_PRELOAD "$bin_path" -h 2>&1) || exit_code=$?
     if [ -z "$test_out" ]; then
-        test_out=$("$bin_path" --help 2>&1) || exit_code=$?
+        test_out=$(env -u LD_PRELOAD "$bin_path" --help 2>&1) || exit_code=$?
     fi
     if [ -z "$test_out" ]; then
-        test_out=$("$bin_path" 2>&1 | head -n 25) || exit_code=$?
+        test_out=$(env -u LD_PRELOAD "$bin_path" 2>&1 | head -n 25) || exit_code=$?
     fi
 
     # Deteksi kegagalan fatal linker Bionic libc Android / ketidakcocokan arsitektur / pustaka hilang
@@ -91,7 +91,7 @@ audit_binary_candidate() {
 
     local out
     local code=0
-    out=$("$bin_path" -h 2>&1) || code=$?
+    out=$(env -u LD_PRELOAD "$bin_path" -h 2>&1) || code=$?
 
     echo "    -> Exit Code: $code"
     local preview
@@ -460,8 +460,14 @@ while [ "$WAIT_COUNT" -lt 15 ]; do
 done
 
 if [ "$ENGINE_READY" -eq 0 ]; then
-    echo -e "${YELLOW}[PERINGATAN] Llama Engine belum mengembalikan HTTP 200 dalam waktu 30 detik.${NC}"
-    echo "Periksa logs/llama.log untuk melihat pesan startup engine."
+    echo -e "${RED}[PERINGATAN KRITIS] Llama Engine belum online di port 8080 dalam waktu 30 detik.${NC}"
+    echo "--- Cuplikan Log Terakhir: $PROJECT_DIR/logs/llama.log ---"
+    if [ -f "$PROJECT_DIR/logs/llama.log" ]; then
+        tail -n 25 "$PROJECT_DIR/logs/llama.log"
+    else
+        echo "  (Berkas logs/llama.log belum ada)"
+    fi
+    echo "--------------------------------------------------------"
 fi
 
 # ==============================================================================

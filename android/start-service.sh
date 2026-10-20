@@ -55,12 +55,12 @@ test_binary_executable() {
 
     local test_out
     local exit_code=0
-    test_out=$("$bin_path" -h 2>&1) || exit_code=$?
+    test_out=$(env -u LD_PRELOAD "$bin_path" -h 2>&1) || exit_code=$?
     if [ -z "$test_out" ]; then
-        test_out=$("$bin_path" --help 2>&1) || exit_code=$?
+        test_out=$(env -u LD_PRELOAD "$bin_path" --help 2>&1) || exit_code=$?
     fi
     if [ -z "$test_out" ]; then
-        test_out=$("$bin_path" 2>&1 | head -n 25) || exit_code=$?
+        test_out=$(env -u LD_PRELOAD "$bin_path" 2>&1 | head -n 25) || exit_code=$?
     fi
 
     # Deteksi kegagalan linker Bionic libc Android / ketidakcocokan arsitektur
@@ -233,22 +233,20 @@ ensure_llama_server() {
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA] Menjalankan llama-server lokal pada port 8080..." >> "$LOG_FILE"
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA] Binary: $LLAMA_BIN | Model: $(basename "$MODEL_FILE") ($(du -h "$MODEL_FILE" 2>/dev/null | cut -f1))" >> "$LOG_FILE"
             export LD_LIBRARY_PATH="$PROJECT_DIR/bin:$PREFIX/lib:${LD_LIBRARY_PATH:-}"
-            "$LLAMA_BIN" \
+            env -u LD_PRELOAD "$LLAMA_BIN" \
                 -m "$MODEL_FILE" \
                 --host 127.0.0.1 \
                 --port 8080 \
                 -c 2048 \
                 -t 4 \
-                -b 256 \
-                -np 1 \
-                --n-gpu-layers 0 \
                 >> "$PROJECT_DIR/logs/llama.log" 2>&1 &
             local LLAMA_PID=$!
             echo "$LLAMA_PID" > "$LLAMA_PID_FILE"
 
-            sleep 1
+            sleep 2
             if ! is_pid_alive "$LLAMA_PID"; then
-                echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA ERROR] llama-server langsung mati setelah diluncurkan! Periksa logs/llama.log" >> "$LOG_FILE"
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA ERROR] llama-server langsung mati setelah diluncurkan! Isi logs/llama.log:" >> "$LOG_FILE"
+                tail -n 15 "$PROJECT_DIR/logs/llama.log" >> "$LOG_FILE" 2>/dev/null || true
                 rm -f "$LLAMA_PID_FILE"
             else
                 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA] llama-server aktif dengan PID $LLAMA_PID." >> "$LOG_FILE"
