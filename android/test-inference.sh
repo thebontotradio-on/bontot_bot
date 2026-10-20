@@ -25,24 +25,67 @@ FAIL_COUNT=0
 # 0. Audit Binary & Versi llama-server
 # ------------------------------------------------------------------------------
 echo -e "${BOLD}[1/5] Memeriksa Eksekusi Binary & Versi llama-server...${NC}"
+test_binary_executable() {
+    local bin_path="$1"
+    [ -n "$bin_path" ] && [ -x "$bin_path" ] || return 1
+
+    local test_out
+    test_out=$("$bin_path" --version 2>&1 || true)
+    if [ -z "$test_out" ]; then
+        test_out=$("$bin_path" -h 2>&1 | head -n 25 || true)
+    fi
+    if [ -z "$test_out" ]; then
+        test_out=$("$bin_path" 2>&1 | head -n 25 || true)
+    fi
+
+    if echo "$test_out" | grep -qiE "CANNOT LINK|cannot locate symbol|bad ELF|Exec format|Illegal instruction|not found in library|No such file"; then
+        return 1
+    fi
+
+    if echo "$test_out" | grep -qiE "llama|usage|options|help|server|build|version|ggml"; then
+        return 0
+    fi
+
+    [ -n "$test_out" ] && return 0
+    return 1
+}
+
 find_llama_server() {
+    # 1. Cek dari paket dpkg llama-cpp jika terpasang
+    if command -v dpkg >/dev/null 2>&1; then
+        local dpkg_bin
+        dpkg_bin=$(dpkg -L llama-cpp 2>/dev/null | grep -E '/bin/llama-server$' | head -n 1 || true)
+        if [ -n "$dpkg_bin" ] && [ -x "$dpkg_bin" ] && test_binary_executable "$dpkg_bin"; then
+            echo "$dpkg_bin"
+            return 0
+        fi
+        dpkg_bin=$(dpkg -L llama-cpp 2>/dev/null | grep -E '/bin/.*server' | head -n 1 || true)
+        if [ -n "$dpkg_bin" ] && [ -x "$dpkg_bin" ] && test_binary_executable "$dpkg_bin"; then
+            echo "$dpkg_bin"
+            return 0
+        fi
+    fi
+
+    # 2. Cek lokasi standar
     for p in \
         "$PROJECT_DIR/bin/llama-server" \
         "$PREFIX/bin/llama-server" \
         "/data/data/com.termux/files/usr/bin/llama-server" \
+        "$PREFIX/bin/llama.cpp-server" \
+        "/data/data/com.termux/files/usr/bin/llama.cpp-server" \
         "$HOME/llama.cpp/build/bin/llama-server" \
         "$HOME/llama.cpp/llama-server"; do
-        if [ -n "$p" ] && [ -x "$p" ]; then
-            if "$p" -h >/dev/null 2>&1 || "$p" --version >/dev/null 2>&1; then
-                echo "$p"
-                return 0
-            fi
+        if [ -n "$p" ] && [ -x "$p" ] && test_binary_executable "$p"; then
+            echo "$p"
+            return 0
         fi
     done
+
+    # 3. Cek command -v di PATH
     if command -v llama-server >/dev/null 2>&1; then
         local cmd_bin
         cmd_bin=$(command -v llama-server)
-        if [ -x "$cmd_bin" ] && ("$cmd_bin" -h >/dev/null 2>&1 || "$cmd_bin" --version >/dev/null 2>&1); then
+        if [ -x "$cmd_bin" ] && test_binary_executable "$cmd_bin"; then
             echo "$cmd_bin"
             return 0
         fi
