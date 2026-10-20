@@ -45,45 +45,60 @@ check_and_clean_stale_pid() {
     return 1
 }
 
+export LD_LIBRARY_PATH="$PROJECT_DIR/bin:$PREFIX/lib:${LD_LIBRARY_PATH:-}"
+
 test_binary_executable() {
     local bin_path="$1"
     [ -n "$bin_path" ] && [ -x "$bin_path" ] || return 1
 
+    export LD_LIBRARY_PATH="$PROJECT_DIR/bin:$PREFIX/lib:${LD_LIBRARY_PATH:-}"
+
     local test_out
-    test_out=$("$bin_path" --version 2>&1 || true)
+    local exit_code=0
+    test_out=$("$bin_path" -h 2>&1) || exit_code=$?
     if [ -z "$test_out" ]; then
-        test_out=$("$bin_path" -h 2>&1 | head -n 25 || true)
+        test_out=$("$bin_path" --help 2>&1) || exit_code=$?
     fi
     if [ -z "$test_out" ]; then
-        test_out=$("$bin_path" 2>&1 | head -n 25 || true)
+        test_out=$("$bin_path" 2>&1 | head -n 25) || exit_code=$?
     fi
 
-    if echo "$test_out" | grep -qiE "CANNOT LINK|cannot locate symbol|bad ELF|Exec format|Illegal instruction|not found in library|No such file"; then
+    # Deteksi kegagalan linker Bionic libc Android / ketidakcocokan arsitektur
+    if echo "$test_out" | grep -qiE "CANNOT LINK|cannot locate symbol|bad ELF|Exec format|Illegal instruction|library \".*\" not found|No such file or directory"; then
         return 1
     fi
 
+    # Jika binary menghasilkan banner atau help text (terlepas dari exit code nonzero) -> Valid
     if echo "$test_out" | grep -qiE "llama|usage|options|help|server|build|version|ggml"; then
         return 0
     fi
 
-    [ -n "$test_out" ] && return 0
+    if [ -n "$test_out" ] && [ "$exit_code" -le 2 ]; then
+        return 0
+    fi
     return 1
 }
 
 find_llama_server() {
-    # 1. Cek dari paket dpkg llama-cpp jika terpasang
+    export LD_LIBRARY_PATH="$PROJECT_DIR/bin:$PREFIX/lib:${LD_LIBRARY_PATH:-}"
+
+    # 1. Cek dari paket dpkg llama-cpp / llama.cpp jika terpasang
     if command -v dpkg >/dev/null 2>&1; then
-        local dpkg_bin
-        dpkg_bin=$(dpkg -L llama-cpp 2>/dev/null | grep -E '/bin/llama-server$' | head -n 1 || true)
-        if [ -n "$dpkg_bin" ] && [ -x "$dpkg_bin" ] && test_binary_executable "$dpkg_bin"; then
-            echo "$dpkg_bin"
-            return 0
-        fi
-        dpkg_bin=$(dpkg -L llama-cpp 2>/dev/null | grep -E '/bin/.*server' | head -n 1 || true)
-        if [ -n "$dpkg_bin" ] && [ -x "$dpkg_bin" ] && test_binary_executable "$dpkg_bin"; then
-            echo "$dpkg_bin"
-            return 0
-        fi
+        for pkg_name in "llama-cpp" "llama.cpp" "llama-cpp-tools"; do
+            if dpkg -s "$pkg_name" >/dev/null 2>&1; then
+                local dpkg_bin
+                dpkg_bin=$(dpkg -L "$pkg_name" 2>/dev/null | grep -E '/bin/llama-server$' | head -n 1 || true)
+                if [ -n "$dpkg_bin" ] && [ -x "$dpkg_bin" ] && test_binary_executable "$dpkg_bin"; then
+                    echo "$dpkg_bin"
+                    return 0
+                fi
+                dpkg_bin=$(dpkg -L "$pkg_name" 2>/dev/null | grep -E '/bin/.*server' | head -n 1 || true)
+                if [ -n "$dpkg_bin" ] && [ -x "$dpkg_bin" ] && test_binary_executable "$dpkg_bin"; then
+                    echo "$dpkg_bin"
+                    return 0
+                fi
+            fi
+        done
     fi
 
     # 2. Cek lokasi standar
@@ -217,6 +232,7 @@ ensure_llama_server() {
         if ! check_and_clean_stale_pid "$LLAMA_PID_FILE" "llama"; then
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA] Menjalankan llama-server lokal pada port 8080..." >> "$LOG_FILE"
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA] Binary: $LLAMA_BIN | Model: $(basename "$MODEL_FILE") ($(du -h "$MODEL_FILE" 2>/dev/null | cut -f1))" >> "$LOG_FILE"
+            export LD_LIBRARY_PATH="$PROJECT_DIR/bin:$PREFIX/lib:${LD_LIBRARY_PATH:-}"
             "$LLAMA_BIN" \
                 -m "$MODEL_FILE" \
                 --host 127.0.0.1 \

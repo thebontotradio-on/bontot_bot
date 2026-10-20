@@ -263,10 +263,10 @@ else
     fi
 fi
 
-# Pastikan binary llama-server terpasang
-if ! command -v llama-server >/dev/null 2>&1 && [ ! -x "$PROJECT_DIR/bin/llama-server" ] && [ ! -x "$PREFIX/bin/llama-server" ]; then
-    echo "Menyiapkan engine inferensi lokal llama-server..."
-    pkg install -y llama-cpp < /dev/null 2>/dev/null || true
+# Pastikan binary llama-server terpasang dan tervalidasi
+if [ -f "$PROJECT_DIR/android/setup-llama.sh" ]; then
+    echo "Menyiapkan engine inferensi lokal llama-server melalui setup-llama.sh..."
+    bash "$PROJECT_DIR/android/setup-llama.sh" "$PROJECT_DIR" || true
 fi
 
 # 8. KONFIGURASI AUTOSTART TERMUX:BOOT & WATCHDOG

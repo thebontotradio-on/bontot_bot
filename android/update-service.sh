@@ -51,7 +51,7 @@ echo "Mengunduh pembaruan skrip dan modul dari branch main via HTTPS..."
 for rel_path in "${UPDATED_FILES[@]}"; do
     mkdir -p "$(dirname "$PROJECT_DIR/$rel_path")"
     echo "  - Memperbarui $rel_path..."
-    curl -sSL "$RAW_BASE/$rel_path" -o "$PROJECT_DIR/$rel_path.tmp"
+    curl -sSL -4 --connect-timeout 15 "$RAW_BASE/$rel_path" -o "$PROJECT_DIR/$rel_path.tmp"
     if [ -s "$PROJECT_DIR/$rel_path.tmp" ]; then
         mv "$PROJECT_DIR/$rel_path.tmp" "$PROJECT_DIR/$rel_path"
     else

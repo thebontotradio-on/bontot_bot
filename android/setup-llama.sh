@@ -3,8 +3,8 @@
 # SI BONTOT — Native Llama Engine Installer (Android ARM64 / Termux)
 # Biaya: Rp0 | 100% Bebas Kartu Kredit | Tanpa PRoot (Native C++ ARM64)
 # Prioritas: 
-# 1. Paket Resmi Termux (llama-cpp 0.7.0 yang sudah terpasang)
-# 2. Binary Precompiled ARM64 Resmi dari GitHub Release (dengan verifikasi HTTP & integritas)
+# 1. Audit Paket Resmi Termux (llama-cpp 0.7.0 yang sudah terpasang)
+# 2. Binary Precompiled ARM64 Bionic Resmi dari GitHub Release (ggml-org/llama.cpp)
 # 3. NOL CMAKE — Dilarang memanggil cmake yang rusak linker
 # ==============================================================================
 
@@ -17,6 +17,9 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
+
+# Pastikan loader sistem selalu mencari pustaka di folder bin proyek dan prefix Termux
+export LD_LIBRARY_PATH="$PROJECT_DIR/bin:$PREFIX/lib:${LD_LIBRARY_PATH:-}"
 
 echo -e "${CYAN}${BOLD}"
 echo "=================================================================="
@@ -35,55 +38,107 @@ fi
 echo -e "${GREEN}✔ Arsitektur ARM64 terverifikasi.${NC}"
 
 # Helper: Uji apakah binary ELF ARM64 dapat dieksekusi tanpa error linker Bionic
+# Menangkap stdout/stderr dan TIDAK menganggap exit code nonzero sebagai kegagalan jika help text muncul
 test_binary_executable() {
     local bin_path="$1"
     [ -n "$bin_path" ] && [ -x "$bin_path" ] || return 1
 
+    export LD_LIBRARY_PATH="$PROJECT_DIR/bin:$PREFIX/lib:${LD_LIBRARY_PATH:-}"
+
     local test_out
-    test_out=$("$bin_path" --version 2>&1 || true)
+    local exit_code=0
+    test_out=$("$bin_path" -h 2>&1) || exit_code=$?
     if [ -z "$test_out" ]; then
-        test_out=$("$bin_path" -h 2>&1 | head -n 25 || true)
+        test_out=$("$bin_path" --help 2>&1) || exit_code=$?
     fi
     if [ -z "$test_out" ]; then
-        test_out=$("$bin_path" 2>&1 | head -n 25 || true)
+        test_out=$("$bin_path" 2>&1 | head -n 25) || exit_code=$?
     fi
 
-    # Deteksi kegagalan linker Bionic libc Android / ketidakcocokan arsitektur
-    if echo "$test_out" | grep -qiE "CANNOT LINK|cannot locate symbol|bad ELF|Exec format|Illegal instruction|not found in library|No such file"; then
+    # Deteksi kegagalan fatal linker Bionic libc Android / ketidakcocokan arsitektur / pustaka hilang
+    if echo "$test_out" | grep -qiE "CANNOT LINK|cannot locate symbol|bad ELF|Exec format|Illegal instruction|library \".*\" not found|No such file or directory"; then
         return 1
     fi
 
-    # Jika binary menghasilkan banner atau help text (terlepas dari exit code 0 atau 1) -> Valid
+    # Jika binary menghasilkan banner atau help text (terlepas dari exit code nonzero 1 atau 255) -> Valid
     if echo "$test_out" | grep -qiE "llama|usage|options|help|server|build|version|ggml"; then
         return 0
     fi
 
-    # Jika binary menghasilkan output apa pun tanpa linker crash
-    if [ -n "$test_out" ]; then
+    # Jika ada output dan bukan crash linker
+    if [ -n "$test_out" ] && [ "$exit_code" -le 2 ]; then
         return 0
     fi
 
     return 1
 }
 
-# Helper: Cari binary llama-server di semua lokasi potensial
-find_llama_server() {
-    # 1. Cek dari paket dpkg llama-cpp jika terpasang di Termux
-    if command -v dpkg >/dev/null 2>&1; then
-        local dpkg_bin
-        dpkg_bin=$(dpkg -L llama-cpp 2>/dev/null | grep -E '/bin/llama-server$' | head -n 1 || true)
-        if [ -n "$dpkg_bin" ] && [ -x "$dpkg_bin" ] && test_binary_executable "$dpkg_bin"; then
-            echo "$dpkg_bin"
-            return 0
-        fi
-        dpkg_bin=$(dpkg -L llama-cpp 2>/dev/null | grep -E '/bin/.*server' | head -n 1 || true)
-        if [ -n "$dpkg_bin" ] && [ -x "$dpkg_bin" ] && test_binary_executable "$dpkg_bin"; then
-            echo "$dpkg_bin"
-            return 0
-        fi
+# Helper: Audit mendalam satu kandidat binary dengan logging transparan
+audit_binary_candidate() {
+    local bin_path="$1"
+    local source_desc="$2"
+    echo -e "  [Audit Kandidat] $source_desc: $bin_path"
+    if [ ! -f "$bin_path" ]; then
+        echo "    -> Berkas tidak ada di disk."
+        return 1
+    fi
+    if [ ! -x "$bin_path" ]; then
+        echo "    -> Berkas tidak executable. Memberikan izin chmod +x..."
+        chmod +x "$bin_path" 2>/dev/null || true
     fi
 
-    # 2. Cek lokasi standar Termux dan proyek
+    export LD_LIBRARY_PATH="$PROJECT_DIR/bin:$PREFIX/lib:${LD_LIBRARY_PATH:-}"
+
+    local out
+    local code=0
+    out=$("$bin_path" -h 2>&1) || code=$?
+
+    echo "    -> Exit Code: $code"
+    local preview
+    preview=$(echo "$out" | head -n 3 | tr '\n' ' ' | cut -c1-120)
+    echo "    -> Cuplikan Respons: \"$preview...\""
+
+    if echo "$out" | grep -qiE "CANNOT LINK|cannot locate symbol|bad ELF|Exec format|Illegal instruction|library \".*\" not found"; then
+        local err_line
+        err_line=$(echo "$out" | grep -iE "CANNOT LINK|cannot locate symbol|bad ELF|Exec format|Illegal instruction|library" | head -n 1)
+        echo -e "    -> ${RED}[GAGAL LINKER] $err_line${NC}"
+        return 1
+    elif echo "$out" | grep -qiE "llama|usage|options|help|server|build|version|ggml"; then
+        echo -e "    -> ${GREEN}[VALID] Binary lolos uji eksekusi dan menghasilkan teks bantuan normal.${NC}"
+        return 0
+    elif [ -n "$out" ]; then
+        echo -e "    -> ${GREEN}[VALID] Binary merespons tanpa error linker.${NC}"
+        return 0
+    else
+        echo -e "    -> ${RED}[GAGAL] Binary tidak menghasilkan output apa pun.${NC}"
+        return 1
+    fi
+}
+
+# Helper: Cari binary llama-server di semua lokasi potensial
+find_llama_server() {
+    export LD_LIBRARY_PATH="$PROJECT_DIR/bin:$PREFIX/lib:${LD_LIBRARY_PATH:-}"
+
+    # 1. Cek dari paket dpkg llama-cpp / llama.cpp jika terpasang di Termux
+    if command -v dpkg >/dev/null 2>&1; then
+        for pkg_name in "llama-cpp" "llama.cpp" "llama-cpp-tools"; do
+            if dpkg -s "$pkg_name" >/dev/null 2>&1; then
+                local dpkg_bin
+                dpkg_bin=$(dpkg -L "$pkg_name" 2>/dev/null | grep -E '/bin/llama-server$' | head -n 1 || true)
+                if [ -n "$dpkg_bin" ] && [ -x "$dpkg_bin" ] && test_binary_executable "$dpkg_bin"; then
+                    echo "$dpkg_bin"
+                    return 0
+                fi
+                dpkg_bin=$(dpkg -L "$pkg_name" 2>/dev/null | grep -E '/bin/.*server' | head -n 1 || true)
+                if [ -n "$dpkg_bin" ] && [ -x "$dpkg_bin" ] && test_binary_executable "$dpkg_bin"; then
+                    echo "$dpkg_bin"
+                    return 0
+                fi
+            fi
+        done
+    fi
+
+    # 2. Cek lokasi standar Termux dan folder proyek
     for p in \
         "$PROJECT_DIR/bin/llama-server" \
         "$PREFIX/bin/llama-server" \
@@ -126,57 +181,71 @@ find_model_file() {
 }
 
 download_official_prebuilt() {
-    echo -e "\n${YELLOW}[Jalur Prebuilt] Memeriksa & mengunduh binary resmi ARM64 Android dari GitHub release (ggml-org/llama.cpp)...${NC}"
+    echo -e "\n${YELLOW}[Jalur Prebuilt Bionic] Mengunduh binary resmi ARM64 Android dari GitHub release (ggml-org/llama.cpp)...${NC}"
     mkdir -p "$PROJECT_DIR/bin" "$PROJECT_DIR/scratch"
     local ARCHIVE="$PROJECT_DIR/scratch/llama-android-arm64.tar.gz"
-    local API_URL="https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10"
     local CANDIDATE_URLS=()
 
-    echo "Menghubungi GitHub API untuk memverifikasi aset rilis ARM64 Android..."
+    # Daftar rilis terverifikasi upstream ggml-org/llama.cpp untuk Android ARM64 Bionic (NDK API 28)
+    # b11669 merupakan build resmi untuk rilis v0.7.0
+    local OFFICIAL_TAGS=("b11753" "b11699" "b11669" "b11641" "b11617")
+
+    # Upayakan query GitHub API jika kuota IP belum terlampaui
+    local API_URL="https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5"
+    echo "Memeriksa ketersediaan rilis terbaru via GitHub API..."
     local API_RESP
-    API_RESP=$(curl -sL --max-time 15 -H "Accept: application/vnd.github.v3+json" "$API_URL" 2>/dev/null || true)
+    API_RESP=$(curl -s -L -4 --connect-timeout 8 --max-time 12 -H "Accept: application/vnd.github.v3+json" -H "User-Agent: Bontot-Termux-Agent" "$API_URL" 2>/dev/null || true)
 
     if [ -n "$API_RESP" ]; then
         while IFS= read -r match_url; do
             if [ -n "$match_url" ]; then
                 CANDIDATE_URLS+=("$match_url")
             fi
-        done < <(echo "$API_RESP" | grep -o 'https://github.com/ggml-org/llama.cpp/releases/download/[^"]*android-arm64[^"]*\.tar\.gz' | sort -u || true)
+        done < <(echo "$API_RESP" | grep -o 'https://github.com/ggml-org/llama.cpp/releases/download/[^"]*bin-android-arm64\.tar\.gz' | sort -u || true)
     fi
 
-    echo "Ditemukan ${#CANDIDATE_URLS[@]} kandidat aset rilis dari GitHub API."
+    # Gabungkan daftar kandidat rilis resmi upstream
+    for tag in "${OFFICIAL_TAGS[@]}"; do
+        CANDIDATE_URLS+=("https://github.com/ggml-org/llama.cpp/releases/download/${tag}/llama-${tag}-bin-android-arm64.tar.gz")
+    done
 
-    # Daftar URL cadangan jika GitHub API dibatasi kuota (HTTP 403 Rate Limited)
-    if [ ${#CANDIDATE_URLS[@]} -eq 0 ]; then
-        echo "GitHub API tidak mengembalikan daftar (kemungkinan limit kuota API). Menggunakan daftar rilis terverifikasi..."
-        CANDIDATE_URLS+=(
-            "https://github.com/ggml-org/llama.cpp/releases/download/b11699/llama-b11699-bin-android-arm64.tar.gz"
-            "https://github.com/ggml-org/llama.cpp/releases/download/b11641/llama-b11641-bin-android-arm64.tar.gz"
-            "https://github.com/ggml-org/llama.cpp/releases/download/b11617/llama-b11617-bin-android-arm64.tar.gz"
-            "https://github.com/ggml-org/llama.cpp/releases/download/b11334/llama-b11334-bin-android-arm64.tar.gz"
-        )
-    fi
+    # Hapus duplikat kandidat
+    local UNIQUE_URLS=()
+    for u in "${CANDIDATE_URLS[@]}"; do
+        local seen=0
+        for uu in "${UNIQUE_URLS[@]}"; do
+            if [ "$uu" = "$u" ]; then
+                seen=1
+                break
+            fi
+        done
+        if [ "$seen" -eq 0 ]; then
+            UNIQUE_URLS+=("$u")
+        fi
+    done
 
-    for TARGET_URL in "${CANDIDATE_URLS[@]}"; do
-        echo -e "\n--- Menguji Kandidat Rilis: $TARGET_URL ---"
-        # 1. Audit HTTP Header sebelum unduhan
+    echo "Total kandidat rilis ARM64 yang akan diuji: ${#UNIQUE_URLS[@]}"
+
+    for TARGET_URL in "${UNIQUE_URLS[@]}"; do
+        echo -e "\n--- Menguji Kandidat: $TARGET_URL ---"
+        # 1. Audit HTTP Header via HEAD (-I) request dengan IPv4 (-4) dan follow redirect (-L)
+        # KRITIS: Jangan gunakan -o /dev/null tanpa -I karena akan mencoba mengunduh seluruh 73 MB dan menyebabkan timeout (HTTP 000)
         local HTTP_CODE
-        HTTP_CODE=$(curl -s -L -o /dev/null -w "%{http_code}" --max-time 15 "$TARGET_URL" 2>/dev/null || echo "000")
-        echo "HTTP Status Code: $HTTP_CODE"
+        HTTP_CODE=$(curl -s -I -L -4 --connect-timeout 10 --max-time 15 -w "%{http_code}" -o /dev/null "$TARGET_URL" 2>/dev/null || echo "000")
+        echo "HTTP Status Code (HEAD): $HTTP_CODE"
 
         if [ "$HTTP_CODE" != "200" ]; then
             echo -e "${YELLOW}URL tidak mengembalikan HTTP 200 (Status: $HTTP_CODE). Melewati kandidat ini.${NC}"
             continue
         fi
 
-        # 2. Unduh berkas dengan curl dan tangkap error asli
-        echo "Mengunduh arsip binary dari $TARGET_URL..."
+        # 2. Unduh berkas dengan curl IPv4, timeout realistis (600s), dan retry otomatis
+        echo -e "${GREEN}✔ Aset rilis valid (HTTP 200). Mengunduh arsip binary Android ARM64 (~73 MB)...${NC}"
         rm -f "$ARCHIVE"
         local CURL_LOG="$PROJECT_DIR/scratch/curl_dl.log"
-        if ! curl -L --fail --progress-bar -o "$ARCHIVE" "$TARGET_URL" 2>"$CURL_LOG"; then
+        if ! curl -L -4 --connect-timeout 20 --max-time 600 --retry 3 --retry-delay 2 --progress-bar -o "$ARCHIVE" "$TARGET_URL" 2>"$CURL_LOG"; then
             echo -e "${RED}[ERROR UNDUHAN] curl gagal mengunduh dari server GitHub.${NC}"
             if [ -f "$CURL_LOG" ]; then
-                echo "Detail log curl:"
                 cat "$CURL_LOG"
             fi
             rm -f "$ARCHIVE" "$CURL_LOG"
@@ -188,15 +257,13 @@ download_official_prebuilt() {
         FILE_SIZE=$(wc -c < "$ARCHIVE" 2>/dev/null || echo 0)
         echo "Ukuran berkas yang diunduh: $FILE_SIZE byte ($((FILE_SIZE / 1048576)) MB)"
 
-        if [ "$FILE_SIZE" -lt 5000000 ]; then
-            echo -e "${RED}[ERROR INTEGRITAS] Berkas terlalu kecil ($FILE_SIZE byte), kemungkinan halaman error HTML.${NC}"
-            echo "Isi awal berkas:"
-            head -n 5 "$ARCHIVE" 2>/dev/null || true
+        if [ "$FILE_SIZE" -lt 10000000 ]; then
+            echo -e "${RED}[ERROR INTEGRITAS] Berkas terlalu kecil ($FILE_SIZE byte), bukan arsip biner lengkap.${NC}"
             rm -f "$ARCHIVE"
             continue
         fi
 
-        # 3. Verifikasi integritas tar.gz
+        # 3. Verifikasi integritas format tar.gz
         if ! tar -tzf "$ARCHIVE" >/dev/null 2>&1; then
             echo -e "${RED}[ERROR INTEGRITAS] Berkas yang diunduh bukan format tar.gz yang valid.${NC}"
             rm -f "$ARCHIVE"
@@ -204,7 +271,7 @@ download_official_prebuilt() {
         fi
 
         # 4. Ekstrak
-        echo "Mengekstrak binary ke folder scratch..."
+        echo "Mengekstrak binary ke folder scratch/extracted..."
         rm -rf "$PROJECT_DIR/scratch/extracted"
         mkdir -p "$PROJECT_DIR/scratch/extracted"
         tar -xzf "$ARCHIVE" -C "$PROJECT_DIR/scratch/extracted"
@@ -216,13 +283,15 @@ download_official_prebuilt() {
             cp "$FOUND_BIN" "$PROJECT_DIR/bin/llama-server"
             chmod +x "$PROJECT_DIR/bin/llama-server"
 
-            # Salin library pendukung (.so)
+            # Salin seluruh library pendukung (.so) ke folder bin proyek dan prefix Termux
             find "$PROJECT_DIR/scratch/extracted" -type f -name "*.so*" -exec cp {} "$PROJECT_DIR/bin/" \; 2>/dev/null || true
             if [ -d "$PREFIX/lib" ]; then
                 find "$PROJECT_DIR/scratch/extracted" -type f -name "*.so*" -exec cp {} "$PREFIX/lib/" \; 2>/dev/null || true
             fi
 
-            if test_binary_executable "$PROJECT_DIR/bin/llama-server"; then
+            export LD_LIBRARY_PATH="$PROJECT_DIR/bin:$PREFIX/lib:${LD_LIBRARY_PATH:-}"
+
+            if audit_binary_candidate "$PROJECT_DIR/bin/llama-server" "Prebuilt Binary Hasil Ekstraksi"; then
                 echo -e "${GREEN}✔ Prebuilt binary llama-server berhasil diekstrak dan lolos uji eksekusi Android Bionic!${NC}"
                 rm -f "$ARCHIVE"
                 rm -rf "$PROJECT_DIR/scratch/extracted"
@@ -244,67 +313,81 @@ download_official_prebuilt() {
     return 1
 }
 
-# 2. Audit dan Deteksi Paket llama-cpp / llama-server
-echo -e "\n${BOLD}[Audit Paket & Binary Lokal] Memeriksa status instalasi llama di Termux...${NC}"
+# ==============================================================================
+# 2. AUDIT SISTEM: PERIKSA PAKET RESMI llama-cpp & BINARY LOKAL
+# ==============================================================================
+echo -e "\n${BOLD}=================================================================="
+echo "    [Tahap 1] AUDIT MANIFEST PAKET & BINARY LOKAL                "
+echo "==================================================================${NC}"
 INSTALLED=0
 
-# Audit isi paket llama-cpp dari Termux jika dpkg tersedia
+# Audit isi paket llama-cpp dari database dpkg Termux
 if command -v dpkg >/dev/null 2>&1; then
-    if dpkg -s llama-cpp >/dev/null 2>&1; then
-        echo -e "${GREEN}✔ Paket resmi 'llama-cpp' terdeteksi di database dpkg!${NC}"
-        PKG_VERSION=$(dpkg -s llama-cpp 2>/dev/null | grep -i '^Version:' | head -n 1 || echo "Version: 0.7.0")
-        echo "  $PKG_VERSION"
-        echo "  Daftar berkas executable yang disediakan paket llama-cpp:"
-        dpkg -L llama-cpp 2>/dev/null | grep -E '/bin/' || echo "  (tidak ada berkas di /bin/)"
+    for pkg_check in "llama-cpp" "llama.cpp" "llama-cpp-tools"; do
+        if dpkg -s "$pkg_check" >/dev/null 2>&1; then
+            echo -e "${GREEN}✔ Paket resmi '$pkg_check' terdeteksi di database dpkg!${NC}"
+            echo "  Detail Paket:"
+            dpkg -s "$pkg_check" 2>/dev/null | grep -E '^(Package|Version|Architecture|Status|Depends):' | sed 's/^/    /'
 
-        # Temukan executable paket
-        EXISTING_BIN=$(find_llama_server 2>/dev/null || true)
-        if [ -n "$EXISTING_BIN" ] && test_binary_executable "$EXISTING_BIN"; then
-            echo -e "${GREEN}✔ Binary llama-server dari paket llama-cpp berhasil diverifikasi: $EXISTING_BIN${NC}"
-            mkdir -p "$PROJECT_DIR/bin"
-            cp "$EXISTING_BIN" "$PROJECT_DIR/bin/llama-server" 2>/dev/null || ln -sf "$EXISTING_BIN" "$PROJECT_DIR/bin/llama-server" 2>/dev/null || true
-            chmod +x "$PROJECT_DIR/bin/llama-server" 2>/dev/null || true
-            INSTALLED=1
+            echo "  Daftar executable yang disediakan paket $pkg_check:"
+            local pkg_bins
+            pkg_bins=$(dpkg -L "$pkg_check" 2>/dev/null | grep -E '/bin/' || true)
+            if [ -n "$pkg_bins" ]; then
+                echo "$pkg_bins" | sed 's/^/    - /'
+                
+                # Uji setiap binary yang disediakan paket
+                while IFS= read -r bin_cand; do
+                    if [ -n "$bin_cand" ] && [ -f "$bin_cand" ]; then
+                        if audit_binary_candidate "$bin_cand" "Paket $pkg_check"; then
+                            if echo "$bin_cand" | grep -q "server"; then
+                                mkdir -p "$PROJECT_DIR/bin"
+                                cp "$bin_cand" "$PROJECT_DIR/bin/llama-server" 2>/dev/null || ln -sf "$bin_cand" "$PROJECT_DIR/bin/llama-server" 2>/dev/null || true
+                                chmod +x "$PROJECT_DIR/bin/llama-server" 2>/dev/null || true
+                                INSTALLED=1
+                                EXISTING_BIN="$PROJECT_DIR/bin/llama-server"
+                                break
+                            fi
+                        fi
+                    fi
+                done <<< "$pkg_bins"
+            else
+                echo "    (tidak ada berkas di /bin/)"
+            fi
         fi
-    else
-        echo "Paket 'llama-cpp' belum terpasang di database dpkg."
-    fi
+    done
 fi
 
-# Jika belum terdeteksi via dpkg, periksa binary di path standar proyek / sistem
+# Jika belum terdeteksi dari dpkg, audit binary di lokasi standar proyek dan sistem
 if [ "$INSTALLED" -eq 0 ]; then
-    EXISTING_BIN=$(find_llama_server 2>/dev/null || true)
-    if [ -n "$EXISTING_BIN" ] && test_binary_executable "$EXISTING_BIN"; then
-        echo -e "${GREEN}✔ Binary llama-server fungsional terdeteksi di: $EXISTING_BIN${NC}"
-        mkdir -p "$PROJECT_DIR/bin"
-        if [ "$EXISTING_BIN" != "$PROJECT_DIR/bin/llama-server" ]; then
-            cp "$EXISTING_BIN" "$PROJECT_DIR/bin/llama-server" 2>/dev/null || ln -sf "$EXISTING_BIN" "$PROJECT_DIR/bin/llama-server" 2>/dev/null || true
-            chmod +x "$PROJECT_DIR/bin/llama-server" 2>/dev/null || true
+    echo -e "\nMemeriksa binary di direktori standar sistem dan proyek..."
+    for std_bin in \
+        "$PROJECT_DIR/bin/llama-server" \
+        "$PREFIX/bin/llama-server" \
+        "/data/data/com.termux/files/usr/bin/llama-server" \
+        "$PREFIX/bin/llama.cpp-server" \
+        "/data/data/com.termux/files/usr/bin/llama.cpp-server" \
+        "$HOME/llama.cpp/build/bin/llama-server" \
+        "$HOME/llama.cpp/llama-server"; do
+        if [ -f "$std_bin" ]; then
+            if audit_binary_candidate "$std_bin" "Lokasi Standar"; then
+                mkdir -p "$PROJECT_DIR/bin"
+                if [ "$std_bin" != "$PROJECT_DIR/bin/llama-server" ]; then
+                    cp "$std_bin" "$PROJECT_DIR/bin/llama-server" 2>/dev/null || ln -sf "$std_bin" "$PROJECT_DIR/bin/llama-server" 2>/dev/null || true
+                    chmod +x "$PROJECT_DIR/bin/llama-server" 2>/dev/null || true
+                fi
+                INSTALLED=1
+                EXISTING_BIN="$PROJECT_DIR/bin/llama-server"
+                break
+            fi
         fi
-        INSTALLED=1
-    fi
+    done
 fi
 
-# Jika binary belum ada sama sekali, coba pasang via pkg Termux (tur-repo)
+# Jika binary belum berfungsi, coba unduh Prebuilt Binary ARM64 Resmi dari GitHub Release
 if [ "$INSTALLED" -eq 0 ]; then
-    echo -e "\n${YELLOW}[Prioritas 1] Memasang paket resmi llama-cpp via Termux pkg manager (tur-repo)...${NC}"
-    pkg install -y tur-repo < /dev/null 2>&1 || true
-    pkg update -y < /dev/null 2>&1 || true
-    pkg install -y llama-cpp < /dev/null 2>&1 || true
-
-    EXISTING_BIN=$(find_llama_server 2>/dev/null || true)
-    if [ -n "$EXISTING_BIN" ] && test_binary_executable "$EXISTING_BIN"; then
-        echo -e "${GREEN}✔ Paket llama-cpp berhasil dipasang via package manager Termux.${NC}"
-        mkdir -p "$PROJECT_DIR/bin"
-        cp "$EXISTING_BIN" "$PROJECT_DIR/bin/llama-server" 2>/dev/null || ln -sf "$EXISTING_BIN" "$PROJECT_DIR/bin/llama-server" 2>/dev/null || true
-        chmod +x "$PROJECT_DIR/bin/llama-server" 2>/dev/null || true
-        INSTALLED=1
-    fi
-fi
-
-# Jika paket repositori gagal, coba unduh Prebuilt Binary ARM64 Resmi
-if [ "$INSTALLED" -eq 0 ]; then
-    echo -e "\n${YELLOW}[Prioritas 2: Alternatif Prebuilt] Mengunduh rilis binary resmi ggml-org/llama.cpp...${NC}"
+    echo -e "\n${BOLD}=================================================================="
+    echo "    [Tahap 2] MENGUNDUH PRECOMPILED BINARY ANDROID ARM64 RESMI   "
+    echo "==================================================================${NC}"
     if download_official_prebuilt; then
         INSTALLED=1
         EXISTING_BIN="$PROJECT_DIR/bin/llama-server"
@@ -313,28 +396,26 @@ fi
 
 # DILARANG MEMANGGIL CMAKE
 if [ "$INSTALLED" -eq 0 ]; then
-    echo -e "\n${RED}[GAGAL KRITIS] Tidak dapat menemukan atau memasang binary llama-server.${NC}"
-    echo "Detail kegagalan:"
-    echo "1. Paket repositori Termux llama-cpp tidak menyediakan binary yang lolos uji eksekusi."
-    echo "2. Seluruh kandidat unduhan prebuilt binary ARM64 resmi gagal diunduh atau gagal dieksekusi."
+    echo -e "\n${RED}${BOLD}=================================================================="
+    echo "    ❌ [GAGAL KRITIS] TIDAK ADA BINARY LLAMA YANG DAPAT DIAKTIFKAN"
+    echo "==================================================================${NC}"
+    echo "Laporan Hambatan Sebenarnya:"
+    echo "1. Paket Termux lokal (jika terpasang) mengalami symbol linker crash pada Bionic libc atau tidak memuat server."
+    echo "2. Seluruh kandidat unduhan binary resmi ARM64 gagal diunduh atau dieksekusi di OS ini."
     echo "3. Kompilasi lokal CMake dilarang karena toolchain cmake di perangkat Anda mengalami symbol linker error."
-    echo "Periksa koneksi jaringan atau repositori Termux Anda, lalu jalankan ulang pembaruan."
+    echo "Periksa sambungan internet perangkat Anda lalu coba jalankan kembali skrip ini."
     exit 1
 fi
 
-VERSION_INFO=$("$EXISTING_BIN" --version 2>/dev/null || "$EXISTING_BIN" -h 2>/dev/null | head -n 2 | tr '\n' ' ' || echo "llama-server ARM64")
-echo "  Info Versi: $VERSION_INFO"
+echo -e "\n${GREEN}${BOLD}✔ Verifikasi Binary Berhasil!${NC}"
+echo "  Lokasi Binary Terpilih: $EXISTING_BIN"
 
-# 3. Verifikasi Eksekusi Binary Nyata Sebelum Memulai Layanan
-LLAMA_EXEC=$(find_llama_server 2>/dev/null || true)
-if [ -z "$LLAMA_EXEC" ] || ! test_binary_executable "$LLAMA_EXEC"; then
-    echo -e "${RED}[GAGAL KRITIS] Verifikasi akhir gagal: Binary $LLAMA_EXEC tidak dapat dieksekusi.${NC}"
-    exit 1
-fi
-echo -e "${GREEN}✔ Binary tervalidasi siap pakai: $LLAMA_EXEC${NC}"
-
-# 4. Verifikasi Berkas Model GGUF
-echo -e "\n${YELLOW}Memeriksa berkas model AI di $PROJECT_DIR/models/...${NC}"
+# ==============================================================================
+# 3. VERIFIKASI MODEL GGUF
+# ==============================================================================
+echo -e "\n${BOLD}=================================================================="
+echo "    [Tahap 3] VERIFIKASI BERKAS MODEL AI GGUF                    "
+echo "==================================================================${NC}"
 mkdir -p "$PROJECT_DIR/models"
 MODEL_FILE=$(find_model_file 2>/dev/null || true)
 
@@ -352,15 +433,18 @@ else
     fi
 fi
 
-# 5. Restart Layanan Bot untuk Mengaktifkan Engine Persisten
-echo -e "\n${CYAN}Memulai ulang layanan SI BONTOT untuk memuat Llama Engine...${NC}"
+# ==============================================================================
+# 4. RESTART LAYANAN BOT & POLLING ENGINE
+# ==============================================================================
+echo -e "\n${BOLD}=================================================================="
+echo "    [Tahap 4] MEMULAI ULANG LAYANAN SI BONTOT (PORT 8080 & 3001) "
+echo "==================================================================${NC}"
 bash "$PROJECT_DIR/android/start-service.sh" restart
 
-# 6. Polling Kesiapan Port 8080 (Maksimal 20 detik)
-echo -e "${YELLOW}Menunggu Llama Engine memuat model ke memori (polling /health)...${NC}"
+echo -e "\n${YELLOW}Menunggu Llama Engine memuat model ke memori (polling /health)...${NC}"
 WAIT_COUNT=0
 ENGINE_READY=0
-while [ "$WAIT_COUNT" -lt 10 ]; do
+while [ "$WAIT_COUNT" -lt 15 ]; do
     WAIT_COUNT=$((WAIT_COUNT + 1))
     HEALTH_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 http://127.0.0.1:8080/health 2>/dev/null || echo "000")
     if [ "$HEALTH_CODE" = "200" ]; then
@@ -368,13 +452,22 @@ while [ "$WAIT_COUNT" -lt 10 ]; do
         echo -e "${GREEN}✔ Llama Engine siap di port 8080 (HTTP 200 OK) dalam ${WAIT_COUNT}x2 detik.${NC}"
         break
     elif [ "$HEALTH_CODE" = "503" ]; then
-        echo "  [Jeda] Model sedang dimuat ke RAM... (${WAIT_COUNT}/10)"
+        echo "  [Jeda] Model sedang dimuat ke RAM... (${WAIT_COUNT}/15)"
     else
-        echo "  [Jeda] Menunggu port 8080 aktif... (${WAIT_COUNT}/10)"
+        echo "  [Jeda] Menunggu port 8080 aktif... (${WAIT_COUNT}/15)"
     fi
     sleep 2
 done
 
-# 7. Jalankan Uji Inferensi HTTP Nyata
-echo -e "\n${CYAN}Menjalankan uji inferensi HTTP nyata...${NC}"
+if [ "$ENGINE_READY" -eq 0 ]; then
+    echo -e "${YELLOW}[PERINGATAN] Llama Engine belum mengembalikan HTTP 200 dalam waktu 30 detik.${NC}"
+    echo "Periksa logs/llama.log untuk melihat pesan startup engine."
+fi
+
+# ==============================================================================
+# 5. UJI INFERENSI NYATA LENGKAP
+# ==============================================================================
+echo -e "\n${BOLD}=================================================================="
+echo "    [Tahap 5] UJI INFERENSI HTTP NYATA LENGKAP                   "
+echo "==================================================================${NC}"
 bash "$PROJECT_DIR/android/test-inference.sh" "$PROJECT_DIR"
