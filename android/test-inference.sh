@@ -240,6 +240,19 @@ else
 fi
 
 # ------------------------------------------------------------------------------
+# 5. Uji Server Tetap Hidup & Port 8080 Persisten Pasca-Pengujian
+# ------------------------------------------------------------------------------
+echo ""
+echo -e "${BOLD}[6/6] Memverifikasi Server Tetap Hidup & Port 8080 Tetap Aktif Pasca-Pengujian...${NC}"
+POST_HEALTH_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://127.0.0.1:8080/health 2>/dev/null || echo "000")
+if [ "$POST_HEALTH_CODE" = "200" ]; then
+    echo -e "  - Status Engine 8080      : ${GREEN}PERSISTEN AKTIF (HTTP 200 OK)${NC}"
+else
+    echo -e "  - Status Engine 8080      : ${RED}MATI SETELAH PENGUJIAN (HTTP $POST_HEALTH_CODE)${NC}"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+# ------------------------------------------------------------------------------
 # Ringkasan Akhir
 # ------------------------------------------------------------------------------
 echo ""

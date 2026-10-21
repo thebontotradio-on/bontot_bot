@@ -205,3 +205,50 @@ test('Android Compatibility: ai-adapter translates POST /api/generate to llama f
   await new Promise(resolve => mockLlama.close(resolve));
 });
 
+test('Android Compatibility: full end-to-end draft inference pipeline (llama-server -> ai-adapter -> server/ai.js)', async () => {
+  const mockLlama = http.createServer((req, res) => {
+    if (req.url === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok' }));
+      return;
+    }
+    if (req.url === '/v1/chat/completions' && req.method === 'POST') {
+      let body = '';
+      req.on('data', c => body += c);
+      req.on('end', () => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: 'Bang Adhy lagi kerja, Bro 😄 Ada yang mau dititipin?'
+              }
+            }
+          ]
+        }));
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+
+  await new Promise(resolve => mockLlama.listen(9090, '127.0.0.1', resolve));
+
+  process.env.OLLAMA_HOST = 'http://127.0.0.1:19434';
+  const ai = require('../server/ai.js');
+
+  const status = await ai.checkOllamaStatus();
+  assert.equal(status.available, true);
+  assert.equal(status.activeModel, 'qwen2.5:0.5b');
+
+  const result = await ai.generateAiReply({ message: 'Ngapain Bang Adhy?' });
+  assert.ok(result.reply, 'Harus menghasilkan balasan teks');
+  assert.equal(result.reply, 'Bang Adhy lagi kerja, Bro 😄 Ada yang mau dititipin?');
+  assert.equal(result.model, 'qwen2.5:0.5b');
+
+  await new Promise(resolve => mockLlama.close(resolve));
+});
+
+

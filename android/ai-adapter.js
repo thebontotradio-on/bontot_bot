@@ -32,23 +32,35 @@ const server = http.createServer((req, res) => {
       llamaRes.on('end', () => {
         // llama-server returns status 200 {"status":"ok"} when model is ready
         if (llamaRes.statusCode >= 200 && llamaRes.statusCode < 300) {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            models: [
-              {
-                name: modelName,
-                model: modelName,
-                modified_at: new Date().toISOString(),
-                size: 470000000,
-                details: { format: 'gguf', family: 'qwen2', parameter_size: '0.5B' }
-              }
-            ]
-          }));
-        } else {
-          // llama-server still loading or busy
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ models: [], status: 'loading' }));
+          let isOk = false;
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.status === 'ok' || parsed.status === 'success' || !parsed.status) {
+              isOk = true;
+            }
+          } catch (_) {
+            isOk = data.includes('ok');
+          }
+
+          if (isOk) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              models: [
+                {
+                  name: modelName,
+                  model: modelName,
+                  modified_at: new Date().toISOString(),
+                  size: 470000000,
+                  details: { format: 'gguf', family: 'qwen2', parameter_size: '0.5B' }
+                }
+              ]
+            }));
+            return;
+          }
         }
+        // llama-server still loading or busy
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ models: [], status: 'loading' }));
       });
     });
 
@@ -89,7 +101,8 @@ const server = http.createServer((req, res) => {
       res.end(JSON.stringify({
         status: 'ok',
         adapter: true,
-        modelName: modelName,
+        ready: isLlamaUp,
+        modelName: isLlamaUp ? modelName : null,
         llamaServer: { host: llamaHost, port: llamaPort, connected: isLlamaUp, statusCode: probeRes.statusCode }
       }));
     });
@@ -99,7 +112,8 @@ const server = http.createServer((req, res) => {
       res.end(JSON.stringify({
         status: 'ok',
         adapter: true,
-        modelName: modelName,
+        ready: false,
+        modelName: null,
         llamaServer: { host: llamaHost, port: llamaPort, connected: false }
       }));
     });

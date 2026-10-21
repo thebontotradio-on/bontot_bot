@@ -148,38 +148,42 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 7. UJI EKSEKUSI LANGSUNG FOREGROUND (REAL-TIME CRASH CAPTURE)
+# 7. UJI EKSEKUSI & AKTIVASI PERSISTEN LLAMA SERVER
 # ------------------------------------------------------------------------------
 echo ""
-echo -e "${BOLD}[BUKTI 7] Uji Eksekusi Langsung di Foreground (Melihat Error Real-Time):${NC}"
-if [ -n "$FOUND_BIN" ] && [ -x "$FOUND_BIN" ] && [ -n "$MODEL_FILE" ] && [ -f "$MODEL_FILE" ]; then
-    echo "Menjalankan: env -u LD_PRELOAD $FOUND_BIN -m $MODEL_FILE --host 127.0.0.1 --port 8080 -c 2048 -t 4"
-    echo "Menangkap keluaran selama 4 detik..."
-    echo "--------------------------------------------------------"
-    
-    # Jalankan langsung dan tangkap outputnya
-    FOREGROUND_OUT=$(env -u LD_PRELOAD LD_LIBRARY_PATH="$PROJECT_DIR/bin:$PREFIX/lib:${LD_LIBRARY_PATH:-}" \
+echo -e "${BOLD}[BUKTI 7] Status Eksekusi Llama Server (Port 8080):${NC}"
+HTTP_8080_CHECK=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 http://127.0.0.1:8080/health 2>/dev/null || echo "000")
+
+if [ "$HTTP_8080_CHECK" = "200" ]; then
+    echo -e "${GREEN}✔ llama-server SUDAH AKTIF dan melayani HTTP di port 8080 (HTTP 200 OK).${NC}"
+    echo "  PID aktif: $(cat "$PROJECT_DIR/logs/llama.pid" 2>/dev/null || echo "tidak tercatat")"
+elif [ -n "$FOUND_BIN" ] && [ -x "$FOUND_BIN" ] && [ -n "$MODEL_FILE" ] && [ -f "$MODEL_FILE" ]; then
+    echo "Menjalankan llama-server di background (persisten, bebas SIGHUP)..."
+    export LD_LIBRARY_PATH="$PROJECT_DIR/bin:$PREFIX/lib:${LD_LIBRARY_PATH:-}"
+    nohup env -u LD_PRELOAD LD_LIBRARY_PATH="$PROJECT_DIR/bin:$PREFIX/lib:${LD_LIBRARY_PATH:-}" \
         "$FOUND_BIN" \
         -m "$MODEL_FILE" \
         --host 127.0.0.1 \
         --port 8080 \
         -c 2048 \
-        -t 4 2>&1 &
-        TEST_PID=$!
-        sleep 4
-        if kill -0 "$TEST_PID" 2>/dev/null; then
-            echo "[SUKSES] llama-server BERHASIL HIDUP dan bertahan di memori! (PID: $TEST_PID)"
-            kill "$TEST_PID" 2>/dev/null || true
-        else
-            wait "$TEST_PID" 2>/dev/null
-            EXIT_CODE=$?
-            echo "[CRASH / MATI] Process langsung keluar dengan Exit Code: $EXIT_CODE"
-        fi
-    )
-    echo "$FOREGROUND_OUT"
-    echo "--------------------------------------------------------"
+        -t 4 \
+        >> "$PROJECT_DIR/logs/llama.log" 2>&1 &
+    TEST_PID=$!
+    echo "$TEST_PID" > "$PROJECT_DIR/logs/llama.pid"
+    disown "$TEST_PID" 2>/dev/null || true
+
+    echo "Menunggu inisialisasi model (4 detik)..."
+    sleep 4
+
+    if kill -0 "$TEST_PID" 2>/dev/null; then
+        echo -e "${GREEN}✔ [SUKSES] llama-server BERHASIL HIDUP dan TETAP AKTIF di memori (PID: $TEST_PID)!${NC}"
+        echo "  (Proses sengaja dipertahankan menyala agar port 8080 tetap melayani inferensi)"
+    else
+        echo -e "${RED}✖ [CRASH / MATI] Process langsung keluar. Cuplikan log:${NC}"
+        tail -n 15 "$PROJECT_DIR/logs/llama.log" 2>/dev/null || true
+    fi
 else
-    echo "Uji foreground dilewati karena binary atau model tidak siap."
+    echo "Uji eksekusi dilewati karena binary atau model belum siap."
 fi
 
 # ------------------------------------------------------------------------------

@@ -233,7 +233,8 @@ ensure_llama_server() {
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA] Menjalankan llama-server lokal pada port 8080..." >> "$LOG_FILE"
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] [LLAMA] Binary: $LLAMA_BIN | Model: $(basename "$MODEL_FILE") ($(du -h "$MODEL_FILE" 2>/dev/null | cut -f1))" >> "$LOG_FILE"
             export LD_LIBRARY_PATH="$PROJECT_DIR/bin:$PREFIX/lib:${LD_LIBRARY_PATH:-}"
-            env -u LD_PRELOAD "$LLAMA_BIN" \
+            nohup env -u LD_PRELOAD LD_LIBRARY_PATH="$PROJECT_DIR/bin:$PREFIX/lib:${LD_LIBRARY_PATH:-}" \
+                "$LLAMA_BIN" \
                 -m "$MODEL_FILE" \
                 --host 127.0.0.1 \
                 --port 8080 \
@@ -242,6 +243,7 @@ ensure_llama_server() {
                 >> "$PROJECT_DIR/logs/llama.log" 2>&1 &
             local LLAMA_PID=$!
             echo "$LLAMA_PID" > "$LLAMA_PID_FILE"
+            disown "$LLAMA_PID" 2>/dev/null || true
 
             sleep 2
             if ! is_pid_alive "$LLAMA_PID"; then
@@ -265,8 +267,10 @@ ensure_ai_adapter() {
     if [ -f "$PROJECT_DIR/android/ai-adapter.js" ]; then
         if ! check_and_clean_stale_pid "$AI_PID_FILE" "ai_adapter"; then
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ADAPTER] Menjalankan AI Adapter (Port 11434)..." >> "$LOG_FILE"
-            node "$PROJECT_DIR/android/ai-adapter.js" >> "$AI_LOG_FILE" 2>&1 &
-            echo $! > "$AI_PID_FILE"
+            nohup node "$PROJECT_DIR/android/ai-adapter.js" >> "$AI_LOG_FILE" 2>&1 &
+            local AI_PID=$!
+            echo "$AI_PID" > "$AI_PID_FILE"
+            disown "$AI_PID" 2>/dev/null || true
         fi
     fi
 }
@@ -416,59 +420,49 @@ run_supervisor() {
         fi
     fi
 
-    # 6. Supervisor Loop: Menjaga Backend Node.js tetap menyala 24/7
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [STARTUP] Memulai SI BONTOT Backend Watchdog (PID: $$)..." >> "$LOG_FILE"
+    # 6. Supervisor Loop: Menjaga Backend Node.js & Layanan AI tetap menyala 24/7
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [STARTUP] Memulai SI BONTOT Watchdog Loop (PID: $$)..." >> "$LOG_FILE"
 
     local CRASH_COUNT=0
     local WINDOW_START
     WINDOW_START=$(date +%s)
 
     while [ "$SHUTDOWN_TRIGGERED" -eq 0 ]; do
-        # Pastikan proses pendukung AI tetap hidup sebelum/selama siklus server
+        # 1. Pastikan Llama Engine (port 8080) hidup & otomatis pulih jika crash
         ensure_llama_server
+
+        # 2. Pastikan AI Adapter (port 11434) hidup & otomatis pulih jika crash
         ensure_ai_adapter
 
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUPERVISOR] Meluncurkan Node.js Server..." >> "$LOG_FILE"
-        
-        export NODE_ENV=production
-        export PORT=3001
+        # 3. Pastikan Backend Server (port 3001) hidup & otomatis pulih jika crash
+        if ! check_and_clean_stale_pid "$SERVER_PID_FILE" "server"; then
+            local NOW
+            NOW=$(date +%s)
+            if [ $((NOW - WINDOW_START)) -lt 60 ]; then
+                CRASH_COUNT=$((CRASH_COUNT + 1))
+            else
+                CRASH_COUNT=1
+                WINDOW_START=$NOW
+            fi
 
-        # Jalankan server di latar belakang subshell watchdog agar PID dapat dicatat
-        node server/index.js >> "$LOG_FILE" 2>&1 &
-        local SERVER_PID=$!
-        echo "$SERVER_PID" > "$SERVER_PID_FILE"
+            if [ "$CRASH_COUNT" -ge 5 ]; then
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] [CRITICAL] Server mengalami 5 crash dalam 60 detik. Menahan restart selama 30 detik demi stabilitas..." >> "$LOG_FILE"
+                sleep 30
+                CRASH_COUNT=0
+                WINDOW_START=$(date +%s)
+            fi
 
-        # Tunggu sampai server berhenti atau menerima sinyal
-        wait "$SERVER_PID"
-        local EXIT_CODE=$?
-
-        rm -f "$SERVER_PID_FILE"
-
-        # Jika shutdown diminta secara eksplisit, keluar loop
-        if [ "$SHUTDOWN_TRIGGERED" -eq 1 ]; then
-            break
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUPERVISOR] Meluncurkan Node.js Server..." >> "$LOG_FILE"
+            export NODE_ENV=production
+            export PORT=3001
+            nohup node server/index.js >> "$LOG_FILE" 2>&1 &
+            local SERVER_PID=$!
+            echo "$SERVER_PID" > "$SERVER_PID_FILE"
+            disown "$SERVER_PID" 2>/dev/null || true
+            sleep 2
         fi
 
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUPERVISOR] Node.js server (PID: $SERVER_PID) berhenti dengan exit code: $EXIT_CODE." >> "$LOG_FILE"
-
-        # Rate-limiting / Anti-thrashing guard jika crash berulang
-        local NOW
-        NOW=$(date +%s)
-        if [ $((NOW - WINDOW_START)) -lt 60 ]; then
-            CRASH_COUNT=$((CRASH_COUNT + 1))
-        else
-            CRASH_COUNT=1
-            WINDOW_START=$NOW
-        fi
-
-        if [ "$CRASH_COUNT" -ge 5 ]; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [CRITICAL] Server mengalami 5 crash dalam 60 detik. Menahan restart selama 30 detik demi stabilitas..." >> "$LOG_FILE"
-            sleep 30
-            CRASH_COUNT=0
-            WINDOW_START=$(date +%s)
-        else
-            sleep 5
-        fi
+        sleep 5
     done
 
     rm -f "$WATCHDOG_PID_FILE"
