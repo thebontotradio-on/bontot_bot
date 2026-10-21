@@ -40,6 +40,7 @@ UPDATED_FILES=(
     "android/healthcheck.sh"
     "android/check-readiness.sh"
     "android/update-service.sh"
+    "android/diagnose-llama.sh"
     "server/index.js"
     "server/ai.js"
     "server/whatsapp.js"
